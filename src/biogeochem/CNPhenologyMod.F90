@@ -2853,6 +2853,7 @@ contains
 
     allocate( minplantjday(0:maxveg,inSH)) ! minimum planting julian day
     allocate( maxplantjday(0:maxveg,inSH)) ! minimum planting julian day
+    allocate( maxharvjday(0:maxveg,inSH))  ! maximum harvest julian day (added by O.Dombrowski)
 
     ! Julian day for the start of the year (mid-winter)
     jdayyrstart(inNH) =   1
@@ -2861,13 +2862,16 @@ contains
     ! Convert planting dates into julian day
     minplantjday(:,:) = huge(1)
     maxplantjday(:,:) = huge(1)
+    maxharvjday(:,:)  = huge(1)
     do n = npcropmin, npcropmax
        if (pftcon%is_pft_known_to_model(n)) then
           minplantjday(n, inNH) = int( get_calday( pftcon%mnNHplantdate(n), 0 ) )
           maxplantjday(n, inNH) = int( get_calday( pftcon%mxNHplantdate(n), 0 ) )
+          maxharvjday(n, inNH)  = int( get_calday( pftcon%mxNHharvdate(n), 0 ) )
 
           minplantjday(n, inSH) = int( get_calday( pftcon%mnSHplantdate(n), 0 ) )
           maxplantjday(n, inSH) = int( get_calday( pftcon%mxSHplantdate(n), 0 ) )
+          maxharvjday(n, inSH)  = int( get_calday( pftcon%mxSHharvdate(n), 0 ) )
        end if
     end do
 
@@ -3240,7 +3244,7 @@ contains
 
   !-----------------------------------------------------------------------
   subroutine CNOffsetLitterfall (num_soilp, filter_soilp, &
-       cnveg_state_inst, cnveg_carbonstate_inst, cnveg_nitrogenstate_inst, cnveg_carbonflux_inst, cnveg_nitrogenflux_inst)
+       crop_inst,cnveg_state_inst, cnveg_carbonstate_inst, cnveg_nitrogenstate_inst, cnveg_carbonflux_inst, cnveg_nitrogenflux_inst)
     !
     ! !DESCRIPTION:
     ! Determines the flux of C and N from displayed pools to litter
@@ -3249,6 +3253,7 @@ contains
     ! !USES:
     use pftconMod        , only : npcropmin
     use pftconMod        , only : nmiscanthus, nirrig_miscanthus, nswitchgrass, nirrig_switchgrass
+    use clm_time_manager , only : get_curr_date, get_curr_calday, get_curr_days_per_year
     
     use CNSharedParamsMod, only : use_fun
     use clm_varctl       , only : CNratio_floating    
@@ -3256,6 +3261,7 @@ contains
     ! !ARGUMENTS:
     integer                       , intent(in)    :: num_soilp       ! number of soil patches in filter
     integer                       , intent(in)    :: filter_soilp(:) ! filter for soil patches
+    type(crop_type)               , intent(inout) :: crop_inst
     type(cnveg_state_type)        , intent(inout) :: cnveg_state_inst
     type(cnveg_carbonstate_type)  , intent(in)    :: cnveg_carbonstate_inst
     type(cnveg_nitrogenstate_type), intent(in)    :: cnveg_nitrogenstate_inst
@@ -3265,33 +3271,90 @@ contains
     ! !LOCAL VARIABLES:
     integer :: p, c         ! indices
     integer :: fp           ! lake filter patch index
+    integer :: kyr, kmo, kda, mcsec  ! time info
+    integer :: dayspyr      ! days per year
+    integer :: idpp         ! number of days past planting
+    integer :: jday         ! julian day of year
     real(r8):: t1           ! temporary variable
     real(r8):: denom        ! temporary variable for divisor
     real(r8) :: ntovr_leaf  
     real(r8) :: fr_leafn_to_litter ! fraction of the nitrogen turnover that goes to litter; remaining fraction is retranslocated
+    real(r8) :: pr_fr    ! fraction of total stem biomass that is pruned (added by O.Dombrowski)
     !-----------------------------------------------------------------------
 
     associate(                                                                           & 
          ivt                   =>    patch%itype                                       , & ! Input:  [integer  (:) ]  patch vegetation type                                
 
+         mxmat                 =>    pftcon%mxmat                                      , & ! Input:
          leafcn                =>    pftcon%leafcn                                     , & ! Input:  leaf C:N (gC/gN) 
          
          biofuel_harvfrac      =>    pftcon%biofuel_harvfrac                           , & ! Input:  cut a fraction of leaf & stem for biofuel (-) 
                                           
          lflitcn               =>    pftcon%lflitcn                                    , & ! Input:  leaf litter C:N (gC/gN)                           
          frootcn               =>    pftcon%frootcn                                    , & ! Input:  fine root C:N (gC/gN)                             
-         graincn               =>    pftcon%graincn                                    , & ! Input:  grain C:N (gC/gN)                                 
+         graincn               =>    pftcon%graincn                                    , & ! Input:  grain C:N (gC/gN) 
+         perennial             =>    pftcon%perennial                                  , & ! Input: binary flag for perennial crop phenology (added by O.Dombrowski) 
+         mulch_pruning         =>    pftcon%mulch_pruning                              , & ! Input: binary flag for exporting or mulching of pruning material (added by O.Dombrowski)
+         prune_fr              =>    pftcon%prune_fr                                   , & ! Input: fraction of deadstem biomass that is pruned (added by O.Dombrowski)                                
 
-         offset_flag           =>    cnveg_state_inst%offset_flag_patch                , & ! Input:  [real(r8) (:) ]  offset flag                                       
+         offset_flag           =>    cnveg_state_inst%offset_flag_patch                , & ! Input:  [real(r8) (:) ]  offset flag   
+         offset2_flag          =>    cnveg_state_inst%offset2_flag_patch               , & ! Input:  [real(r8) (:) ]  orchard rotation flag (added by O.Dombrowski)                                     
          offset_counter        =>    cnveg_state_inst%offset_counter_patch             , & ! Input:  [real(r8) (:) ]  offset days counter                               
+         prune_flag            =>    cnveg_state_inst%prune_flag_patch                 , & ! Input:  binary flag for pruning (added by O.Dombrowski) 
+         harvest_flag          =>    cnveg_state_inst%harvest_flag_patch               , & ! Input:  [real(r8) (:) ]  harvest flag (added by O.Dombrowski)
+         idop                  =>    cnveg_state_inst%idop_patch                       , & ! Output: [integer (:)]  date of planting
+
+         yrop                  =>    crop_inst%yrop_patch                              , & ! Output: [integer (:)]  year of planting (added O.Dombrowski)
 
          leafc                 =>    cnveg_carbonstate_inst%leafc_patch                , & ! Input:  [real(r8) (:) ]  (gC/m2) leaf C                                    
          frootc                =>    cnveg_carbonstate_inst%frootc_patch               , & ! Input:  [real(r8) (:) ]  (gC/m2) fine root C                               
-         grainc                =>    cnveg_carbonstate_inst%grainc_patch               , & ! Input:  [real(r8) (:) ]  (gC/m2) grain C                                   
+         grainc                =>    cnveg_carbonstate_inst%grainc_patch               , & ! Input:  [real(r8) (:) ]  (gC/m2) grain C                         
          cropseedc_deficit     =>    cnveg_carbonstate_inst%cropseedc_deficit_patch    , & ! Input:  [real(r8) (:) ]  (gC/m2) crop seed C deficit
          livestemc             =>    cnveg_carbonstate_inst%livestemc_patch            , & ! Input:  [real(r8) (:) ]  (gC/m2) livestem C                                
+         deadstemc             =>    cnveg_carbonstate_inst%deadstemc_patch            , & ! Input:  [real(r8) (:) ]  (gC/m2) deadstem C
+         deadstemc_soy         =>    cnveg_carbonstate_inst%deadstemc_soy_patch        , & ! Input:  [real(r8) (:) ]  (gC/m2) dead stem C at the start of season 
+         livecrootc            =>    cnveg_carbonstate_inst%livecrootc_patch           , & ! Input:  [real(r8) (:) ]  (gC/m2) live coarse root C
+         deadcrootc            =>    cnveg_carbonstate_inst%deadcrootc_patch           , & ! Input:  [real(r8) (:) ]  (gC/m2) dead coarse root C
+         xsmrpool              =>    cnveg_carbonstate_inst%xsmrpool_patch             , & ! Input:  [real(r8) (:)]   (gC/m2) abstract C pool to meet excess MR demand
+         leafc_storage         =>    cnveg_carbonstate_inst%leafc_storage_patch        , & ! Input:  [real(r8) (:)]   (gC/m2) leaf C storage
+         frootc_storage        =>    cnveg_carbonstate_inst%frootc_storage_patch       , & ! Input:  [real(r8) (:)]   (gC/m2) fine root C storage
+         livestemc_storage     =>    cnveg_carbonstate_inst%livestemc_storage_patch    , & ! Input:  [real(r8) (:) ]  (gC/m2) livestem storage C
+         deadstemc_storage     =>    cnveg_carbonstate_inst%deadstemc_storage_patch    , & ! Input:  [real(r8) (:) ]  (gC/m2) deadstem storage C
+         deadstemc_storage_soy =>    cnveg_carbonstate_inst%deadstemc_storage_soy_patch , & ! Input: [real(r8) (:) ]  (gC/m2) dead stem C storage at the start of season
+         livecrootc_storage    =>    cnveg_carbonstate_inst%livecrootc_storage_patch   , & ! Input:  [real(r8) (:) ]  (gC/m2) livecrootc storage C
+         deadcrootc_storage    =>    cnveg_carbonstate_inst%deadcrootc_storage_patch   , & ! Input:  [real(r8) (:)]   (gC/m2) dead coarse root C storage
+         gresp_storage         =>    cnveg_carbonstate_inst%gresp_storage_patch        , & ! Input:  [real(r8) (:)]  (gC/m2) growth respiration storage
+         leafc_xfer            =>    cnveg_carbonstate_inst%leafc_xfer_patch           , & ! Input:  [real(r8) (:)]  (gC/m2) leaf C transfer
+         frootc_xfer           =>    cnveg_carbonstate_inst%frootc_xfer_patch          , & ! Input:  [real(r8) (:)]  (gC/m2) fine root C transfer
+         livestemc_xfer        =>    cnveg_carbonstate_inst%livestemc_xfer_patch       , & ! Input:  [real(r8) (:)]  (gC/m2) live stem C transfer
+         deadstemc_xfer        =>    cnveg_carbonstate_inst%deadstemc_xfer_patch       , & ! Input:  [real(r8) (:)]  (gC/m2) dead stem C transfer
+         livecrootc_xfer       =>    cnveg_carbonstate_inst%livecrootc_xfer_patch      , & ! Input:  [real(r8) (:)]  (gC/m2) live coarse root C transfer
+         deadcrootc_xfer       =>    cnveg_carbonstate_inst%deadcrootc_xfer_patch      , & ! Input:  [real(r8) (:)]  (gC/m2) dead coarse root C transfer
+         gresp_xfer            =>    cnveg_carbonstate_inst%gresp_xfer_patch           , & ! Input:  [real(r8) (:)]  (gC/m2) growth respiration transfer
+
+
+
+
          cropseedn_deficit     =>    cnveg_nitrogenstate_inst%cropseedn_deficit_patch  , & ! Input:  [real(r8) (:) ]  (gC/m2) crop seed N deficit
          livestemn             =>    cnveg_nitrogenstate_inst%livestemn_patch          , & ! Input:  [real(r8) (:) ]  (gN/m2) livestem N
+         deadstemn             => cnveg_nitrogenstate_inst%deadstemn_patch             , & ! Input: [real(r8) (:)]  (gN/m2) dead stem N
+         deadstemn_soy         => cnveg_nitrogenstate_inst%deadstemn_soy_patch         , & ! Input: [real(r8) (:)]  (gN/m2) dead stem N at the start of season
+         livecrootn            => cnveg_nitrogenstate_inst%livecrootn_patch            , & ! Input: [real(r8) (:)]  (gN/m2) live coarse root N
+         deadcrootn            => cnveg_nitrogenstate_inst%deadcrootn_patch            , & ! Input: [real(r8) (:)]  (gN/m2) dead coarse root N
+         retransn              => cnveg_nitrogenstate_inst%retransn_patch              , & ! Input: [real(r8) (:)]  (gN/m2) plant pool of retranslocated N
+         leafn_storage         => cnveg_nitrogenstate_inst%leafn_storage_patch         , & ! Input: [real(r8) (:)]  (gN/m2) leaf N storage
+         frootn_storage        => cnveg_nitrogenstate_inst%frootn_storage_patch        , & ! Input: [real(r8) (:)]  (gN/m2) fine root N storage
+         livestemn_storage     => cnveg_nitrogenstate_inst%livestemn_storage_patch     , & ! Input: [real(r8) (:)]  (gN/m2) live stem N storage
+         deadstemn_storage     => cnveg_nitrogenstate_inst%deadstemn_storage_patch     , & ! Input: [real(r8) (:)]  (gN/m2) dead stem N storage
+         deadstemn_storage_soy => cnveg_nitrogenstate_inst%deadstemn_storage_soy_patch , & ! Input: [real(r8) (:)]  (gN/m2) dead stem N storage at the start of season
+         livecrootn_storage    => cnveg_nitrogenstate_inst%livecrootn_storage_patch    , & ! Input: [real(r8) (:)]  (gN/m2) live coarse root N storage
+         deadcrootn_storage    => cnveg_nitrogenstate_inst%deadcrootn_storage_patch    , & ! Input: [real(r8) (:)]  (gN/m2) dead coarse root N storage
+         leafn_xfer            => cnveg_nitrogenstate_inst%leafn_xfer_patch            , & ! Input: [real(r8) (:)]  (gN/m2) leaf N transfer
+         frootn_xfer           => cnveg_nitrogenstate_inst%frootn_xfer_patch           , & ! Input: [real(r8) (:)]  (gN/m2) fine root N transfer
+         livestemn_xfer        => cnveg_nitrogenstate_inst%livestemn_xfer_patch        , & ! Input: [real(r8) (:)]  (gN/m2) live stem N transfer
+         deadstemn_xfer        => cnveg_nitrogenstate_inst%deadstemn_xfer_patch        , & ! Input: [real(r8) (:)]  (gN/m2) dead stem N transfer
+         livecrootn_xfer       => cnveg_nitrogenstate_inst%livecrootn_xfer_patch       , & ! Input: [real(r8) (:)]  (gN/m2) live coarse root N transfer
+         deadcrootn_xfer       => cnveg_nitrogenstate_inst%deadcrootn_xfer_patch       , & ! Input: [real(r8) (:)]  (gN/m2) dead coarse root N transfer
 
          cpool_to_grainc       =>    cnveg_carbonflux_inst%cpool_to_grainc_patch       , & ! Input:  [real(r8) (:) ]  allocation to grain C (gC/m2/s)                   
          npool_to_grainn       =>    cnveg_nitrogenflux_inst%npool_to_grainn_patch     , & ! Input: [real(r8) (:)  ]  allocation to grain N (gN/m2/s)
@@ -3299,6 +3362,9 @@ contains
          cpool_to_livestemc    =>    cnveg_carbonflux_inst%cpool_to_livestemc_patch    , & ! Input:  [real(r8) (:) ]  allocation to live stem C (gC/m2/s)               
          cpool_to_leafc        =>    cnveg_carbonflux_inst%cpool_to_leafc_patch        , & ! Input:  [real(r8) (:) ]  allocation to leaf C (gC/m2/s)                    
          cpool_to_frootc       =>    cnveg_carbonflux_inst%cpool_to_frootc_patch       , & ! Input:  [real(r8) (:) ]  allocation to fine root C (gC/m2/s)               
+         cpool_to_livestemc_storage    =>   cnveg_carbonflux_inst%cpool_to_livestemc_storage_patch    , & ! Input:  [real(r8) (:) ] allocation to live stem storage C (gC/m2/s)
+         cpool_to_deadstemc_storage    => cnveg_carbonflux_inst%cpool_to_deadstemc_storage_patch  , & ! Input:  [real(r8) (:) ] allocation to dead stem storage
+
          prev_leafc_to_litter  =>    cnveg_carbonflux_inst%prev_leafc_to_litter_patch  , & ! Output: [real(r8) (:) ]  previous timestep leaf C litterfall flux (gC/m2/s)
          prev_frootc_to_litter =>    cnveg_carbonflux_inst%prev_frootc_to_litter_patch , & ! Output: [real(r8) (:) ]  previous timestep froot C litterfall flux (gC/m2/s)
          leafc_to_litter       =>    cnveg_carbonflux_inst%leafc_to_litter_patch       , & ! Output: [real(r8) (:) ]  leaf C litterfall (gC/m2/s)                       
@@ -3308,10 +3374,59 @@ contains
          grainc_to_seed        =>    cnveg_carbonflux_inst%grainc_to_seed_patch        , & ! Output: [real(r8) (:) ]  grain C to seed (gC/m2/s)
          leafc_to_biofuelc     =>    cnveg_carbonflux_inst%leafc_to_biofuelc_patch     , & ! Output: [real(r8) (:) ]  leaf C to biofuel C (gC/m2/s)
          livestemc_to_biofuelc =>    cnveg_carbonflux_inst%livestemc_to_biofuelc_patch , & ! Output: [real(r8) (:) ]  livestem C to biofuel C (gC/m2/s)
+         prunec_to_litter      =>    cnveg_carbonflux_inst%prunec_to_litter_patch      , & ! Output: [real(r8) (:) ]  pruning C litterfall (gC/m2/s)
+         prunec_storage_to_litter => cnveg_carbonflux_inst%prunec_storage_to_litter_patch      , & ! Output: [real(r8) (:) ]  pruning storage C litterfall (gC/m2/s)
+
+         hrv_leafc_to_litter                 => cnveg_carbonflux_inst%hrv_leafc_to_litter_patch                , & ! Output: [real(r8) (:)]
+         hrv_frootc_to_litter                => cnveg_carbonflux_inst%hrv_frootc_to_litter_patch               , & ! Output: [real(r8) (:)]
+         hrv_livestemc_to_litter             => cnveg_carbonflux_inst%hrv_livestemc_to_litter_patch            , & ! Output: [real(r8) (:)]
+         wood_harvestc                       => cnveg_carbonflux_inst%wood_harvestc_patch                      , & ! Output: [real(r8) (:)]
+         hrv_livecrootc_to_litter            => cnveg_carbonflux_inst%hrv_livecrootc_to_litter_patch           , & ! Output: [real(r8) (:)]
+         hrv_deadcrootc_to_litter            => cnveg_carbonflux_inst%hrv_deadcrootc_to_litter_patch           , & ! Output: [real(r8) (:)]
+         hrv_xsmrpool_to_atm                 => cnveg_carbonflux_inst%hrv_xsmrpool_to_atm_patch                , & ! Output: [real(r8) (:)]
+         hrv_leafc_storage_to_litter         => cnveg_carbonflux_inst%hrv_leafc_storage_to_litter_patch        , & ! Output: [real(r8) (:)]
+         hrv_frootc_storage_to_litter        => cnveg_carbonflux_inst%hrv_frootc_storage_to_litter_patch       , & ! Output: [real(r8) (:)]
+         hrv_livestemc_storage_to_litter     => cnveg_carbonflux_inst%hrv_livestemc_storage_to_litter_patch    , & ! Output: [real(r8) (:)]
+         hrv_deadstemc_storage_to_litter     => cnveg_carbonflux_inst%hrv_deadstemc_storage_to_litter_patch    , & ! Output: [real(r8) (:)]
+         hrv_livecrootc_storage_to_litter    => cnveg_carbonflux_inst%hrv_livecrootc_storage_to_litter_patch   , & ! Output: [real(r8) (:)]
+         hrv_deadcrootc_storage_to_litter    => cnveg_carbonflux_inst%hrv_deadcrootc_storage_to_litter_patch   , & ! Output: [real(r8) (:)]
+         hrv_gresp_storage_to_litter         => cnveg_carbonflux_inst%hrv_gresp_storage_to_litter_patch        , & ! Output: [real(r8) (:)]
+         hrv_leafc_xfer_to_litter            => cnveg_carbonflux_inst%hrv_leafc_xfer_to_litter_patch           , & ! Output: [real(r8) (:)]
+         hrv_frootc_xfer_to_litter           => cnveg_carbonflux_inst%hrv_frootc_xfer_to_litter_patch          , & ! Output: [real(r8) (:)]
+         hrv_livestemc_xfer_to_litter        => cnveg_carbonflux_inst%hrv_livestemc_xfer_to_litter_patch       , & ! Output: [real(r8) (:)]
+         hrv_deadstemc_xfer_to_litter        => cnveg_carbonflux_inst%hrv_deadstemc_xfer_to_litter_patch       , & ! Output: [real(r8) (:)]
+         hrv_livecrootc_xfer_to_litter       => cnveg_carbonflux_inst%hrv_livecrootc_xfer_to_litter_patch      , & ! Output: [real(r8) (:)]
+         hrv_deadcrootc_xfer_to_litter       => cnveg_carbonflux_inst%hrv_deadcrootc_xfer_to_litter_patch      , & ! Output: [real(r8) (:)]
+         hrv_gresp_xfer_to_litter            => cnveg_carbonflux_inst%hrv_gresp_xfer_to_litter_patch           , & ! Output: [real(r8) (:)]
+
+         hrv_leafn_to_litter                 => cnveg_nitrogenflux_inst%hrv_leafn_to_litter_patch              , & ! Output: [real(r8) (:)]
+         hrv_frootn_to_litter                => cnveg_nitrogenflux_inst%hrv_frootn_to_litter_patch             , & ! Output: [real(r8) (:)]
+         hrv_livestemn_to_litter             => cnveg_nitrogenflux_inst%hrv_livestemn_to_litter_patch          , & ! Output: [real(r8) (:)]
+         wood_harvestn                       => cnveg_nitrogenflux_inst%wood_harvestn_patch                    , & ! Output: [real(r8) (:)]
+         hrv_livecrootn_to_litter            => cnveg_nitrogenflux_inst%hrv_livecrootn_to_litter_patch         , & ! Output: [real(r8) (:)]
+         hrv_deadcrootn_to_litter            => cnveg_nitrogenflux_inst%hrv_deadcrootn_to_litter_patch         , & ! Output: [real(r8) (:)]
+         hrv_retransn_to_litter              => cnveg_nitrogenflux_inst%hrv_retransn_to_litter_patch           , & ! Output: [real(r8) (:)]
+         hrv_leafn_storage_to_litter         => cnveg_nitrogenflux_inst%hrv_leafn_storage_to_litter_patch      , & ! Output: [real(r8) (:)]
+         hrv_frootn_storage_to_litter        => cnveg_nitrogenflux_inst%hrv_frootn_storage_to_litter_patch     , & ! Output: [real(r8) (:)]
+         hrv_livestemn_storage_to_litter     => cnveg_nitrogenflux_inst%hrv_livestemn_storage_to_litter_patch  , & ! Output: [real(r8) (:)]
+         hrv_deadstemn_storage_to_litter     => cnveg_nitrogenflux_inst%hrv_deadstemn_storage_to_litter_patch  , & ! Output: [real(r8) (:)]
+         hrv_livecrootn_storage_to_litter    => cnveg_nitrogenflux_inst%hrv_livecrootn_storage_to_litter_patch , & ! Output: [real(r8) (:)]
+         hrv_deadcrootn_storage_to_litter    => cnveg_nitrogenflux_inst%hrv_deadcrootn_storage_to_litter_patch , & ! Output: [real(r8) (:)]
+         hrv_leafn_xfer_to_litter            => cnveg_nitrogenflux_inst%hrv_leafn_xfer_to_litter_patch         , & ! Output: [real(r8) (:)]
+         hrv_frootn_xfer_to_litter           => cnveg_nitrogenflux_inst%hrv_frootn_xfer_to_litter_patch        , & ! Output: [real(r8) (:)]
+         hrv_livestemn_xfer_to_litter        => cnveg_nitrogenflux_inst%hrv_livestemn_xfer_to_litter_patch       , & ! Output: [real(r8) (:)]
+         hrv_deadstemn_xfer_to_litter        => cnveg_nitrogenflux_inst%hrv_deadstemn_xfer_to_litter_patch       , & ! Output: [real(r8) (:)]
+ 
+
+         hrv_livecrootn_xfer_to_litter       => cnveg_nitrogenflux_inst%hrv_livecrootn_xfer_to_litter_patch    , & ! Output: [real(r8) (:)]
+         hrv_deadcrootn_xfer_to_litter       => cnveg_nitrogenflux_inst%hrv_deadcrootn_xfer_to_litter_patch    ,  & ! Output: [real(r8) (:)]
+
          leafn                 =>    cnveg_nitrogenstate_inst%leafn_patch              , & ! Input:  [real(r8) (:) ]  (gN/m2) leaf N      
          frootn                =>    cnveg_nitrogenstate_inst%frootn_patch             , & ! Input:  [real(r8) (:) ]  (gN/m2) fine root N                        
 
-         livestemn_to_litter   =>    cnveg_nitrogenflux_inst%livestemn_to_litter_patch , & ! Output: [real(r8) (:) ]  livestem N to litter (gN/m2/s)                    
+         livestemn_to_litter   =>    cnveg_nitrogenflux_inst%livestemn_to_litter_patch , & ! Output: [real(r8) (:) ]  livestem N to litter (gN/m2/s)
+         prunen_to_litter      =>    cnveg_nitrogenflux_inst%prunen_to_litter_patch      , & ! Output: [real(r8) (:) ] pruning N litterfall (gN/m2/s)
+         prunen_storage_to_litter => cnveg_nitrogenflux_inst%prunen_storage_to_litter_patch      , & ! Output: [real(r8) (:) ] pruning storage N litterfall (gN/m2/s)                    
          grainn_to_food        =>    cnveg_nitrogenflux_inst%grainn_to_food_patch      , & ! Output: [real(r8) (:) ]  grain N to food (gN/m2/s)                                   
          grainn_to_seed        =>    cnveg_nitrogenflux_inst%grainn_to_seed_patch      , & ! Output: [real(r8) (:) ]  grain N to seed (gN/m2/s)
          leafn_to_biofueln     =>    cnveg_nitrogenflux_inst%leafn_to_biofueln_patch   , & ! Output: [real(r8) (:) ]  leaf N to biofuel N (gN/m2/s)
@@ -3325,13 +3440,36 @@ contains
          leafcn_offset         =>    cnveg_state_inst%leafcn_offset_patch               & ! Output:  [real(r8) (:) ]  Leaf C:N used by FUN
          )
 
+      ! get time info
+      dayspyr = get_curr_days_per_year()
+      jday    = get_curr_calday()
+      call get_curr_date(kyr, kmo, kda, mcsec)
+
       ! The litterfall transfer rate starts at 0.0 and increases linearly
       ! over time, with displayed growth going to 0.0 on the last day of litterfall
       
       do fp = 1,num_soilp
          p = filter_soilp(fp)
 
-         ! only calculate fluxes during offset period
+         ! determine days past planting for pruning management
+         idpp = int(dayspyr)*(kyr-yrop(p)) + jday - idop(p)
+         !incorporate a one-time harvest: annually for perennial crops (Y.Fan)
+         !leaf flux is treated according to leaf property (evergreen or deciduous) and management (prune or not)
+         !grain flux goes to food
+         if (harvest_flag(p) == 1._r8)then
+           if (perennial(ivt(p)) == 1._r8) then
+              if (grainc(p) > 0._r8) then
+                 t1 = 1.0_r8 / dt
+                 ! send grainc to food product pool, no replenishment of
+                 ! seedpool needed for perennial crops 
+                 grainc_to_food(p) = t1 * grainc(p)  + cpool_to_grainc(p)
+                 grainn_to_food(p) = t1 * grainn(p)  + npool_to_grainn(p)
+                 
+              end if
+           end if
+         end if
+
+         ! only calculate fluxes during offset period (a one time step for crops; multiple days for fruit trees)
          if (offset_flag(p) == 1._r8) then
 
             if (abs(offset_counter(p) - dt) <= dt/2._r8) then
@@ -3343,7 +3481,9 @@ contains
 
                ! this assumes that offset_counter == dt for crops
                ! if this were ever changed, we'd need to add code to the "else"
-               if (ivt(p) >= npcropmin) then
+               ! for perennial crops final harvest happens only at rotation 
+
+               if (ivt(p) >= npcropmin .and. perennial(ivt(p)) == 0._r8) then
                   ! Replenish the seed deficits from grain, if there is enough
                   ! available grain. (If there is not enough available grain, the seed
                   ! deficits will accumulate until there is eventually enough grain to
@@ -3365,6 +3505,33 @@ contains
                   livestemc_to_biofuelc(p) = t1 * livestemc(p) * biofuel_harvfrac(ivt(p))
                   livestemn_to_biofueln(p) = t1 * livestemn(p) * biofuel_harvfrac(ivt(p))
                end if
+
+               if (prune_flag(p) == 1._r8) then ! perennial fruit tree crops are pruned at the start of the dormancy period
+                  ! young fruit trees are not pruned in the first 3 years after
+                  ! transplanting
+                  if (idpp < 1095._r8) then
+                     pr_fr = 0._r8
+                  else
+                     pr_fr = prune_fr(ivt(p))
+                  end if
+                  if (mulch_pruning(ivt(p)) == 0._r8) then ! pruning material is exported
+                     ! carbon fluxes to wood product pool
+                     wood_harvestc(p) = t1 * ((deadstemc(p)-deadstemc_soy(p))*pr_fr)
+                     hrv_deadstemc_storage_to_litter(p) = t1 * ((deadstemc_storage(p)-deadstemc_storage_soy(p))*pr_fr) 
+                     ! corresponding nitrogen fluxes
+                     wood_harvestn(p) = t1 * ((deadstemn(p)-deadstemn_soy(p))*pr_fr)
+                     hrv_deadstemn_storage_to_litter(p) = t1 * ((deadstemn_storage(p)-deadstemn_storage_soy(p))*pr_fr)
+
+                  else if (mulch_pruning(ivt(p)) == 1._r8) then ! pruning material is mulched into the soil
+                     ! carbon fluxes to wood product pool
+                     prunec_to_litter(p) = t1 * ((deadstemc(p)-deadstemc_soy(p))*pr_fr)
+                     prunec_storage_to_litter(p) = t1 * ((deadstemc_storage(p)-deadstemc_storage_soy(p))*pr_fr)
+                     ! corresponding nitrogen fluxes
+                     prunen_to_litter(p) = t1 * ((deadstemn(p)-deadstemn_soy(p))*pr_fr)
+                     prunen_storage_to_litter(p) = t1 *((deadstemn_storage(p)-deadstemn_storage_soy(p))*pr_fr)
+                  end if
+               end if
+
             else
                t1 = dt * 2.0_r8 / (offset_counter(p) * offset_counter(p))
                leafc_to_litter(p)  = prev_leafc_to_litter(p)  + t1*(leafc(p)  - prev_leafc_to_litter(p)*offset_counter(p))
@@ -3441,7 +3608,7 @@ contains
                endif    
             end if
 
-            if (ivt(p) >= npcropmin) then
+            if (ivt(p) >= npcropmin .and. perennial(ivt(p)) == 0._r8) then
                ! NOTE(slevis, 2014-12) results in -ve livestemn and -ve totpftn
                !X! livestemn_to_litter(p) = livestemc_to_litter(p) / livewdcn(ivt(p))
                ! NOTE(slevis, 2014-12) Beth Drewniak suggested this instead
@@ -3453,6 +3620,65 @@ contains
             prev_frootc_to_litter(p) = frootc_to_litter(p)
                 
          end if ! end if offset period
+
+         ! offset2 is newly implemented for fruit trees, it initializes orchard
+         ! rotation (complete harvest of all plant organs) after maximum
+         ! lifespan is reached (may vary between 25-40 yrs)
+         ! (O.Dombrowski)   
+         if (offset2_flag(p) == 1._r8 .and. perennial(ivt(p)) == 1._r8) then
+            t1 = 1.0_r8 / dt
+            
+            ! clear-cut carbon fluxes, remove all displayed/storage/transfer pools
+
+            ! displayed pools
+            hrv_leafc_to_litter(p)               = leafc(p)          * t1
+            hrv_leafn_to_litter(p)               = leafn(p)          * t1
+            hrv_frootc_to_litter(p)              = frootc(p)         * t1
+            hrv_frootn_to_litter(p)              = frootn(p)         * t1
+            hrv_livestemc_to_litter(p)           = livestemc(p)      * t1
+            hrv_livestemn_to_litter(p)           = livestemn(p)      * t1
+            wood_harvestc(p)                     = deadstemc(p)      * t1
+            wood_harvestn(p)                     = deadstemn(p)      * t1
+            hrv_livecrootc_to_litter(p)          = livecrootc(p)     * t1
+            hrv_livecrootn_to_litter(p)          = livecrootn(p)     * t1
+            hrv_deadcrootc_to_litter(p)          = deadcrootc(p)     * t1
+            hrv_deadcrootn_to_litter(p)          = deadcrootn(p)     * t1
+            hrv_xsmrpool_to_atm(p)               = xsmrpool(p)       * t1
+ 
+            ! storage pools
+            hrv_leafc_storage_to_litter(p)               = leafc_storage(p)          * t1
+            hrv_leafn_storage_to_litter(p)               = leafn_storage(p)          * t1
+            hrv_frootc_storage_to_litter(p)              = frootc_storage(p)         * t1
+            hrv_frootn_storage_to_litter(p)              = frootn_storage(p)         * t1
+            hrv_livestemc_storage_to_litter(p)           = livestemc_storage(p)      * t1
+            hrv_livestemn_storage_to_litter(p)           = livestemn_storage(p)      * t1
+            hrv_deadstemc_storage_to_litter(p)           = deadstemc_storage(p)      * t1
+            hrv_deadstemn_storage_to_litter(p)           = deadstemn_storage(p)      * t1
+            hrv_livecrootc_storage_to_litter(p)          = livecrootc_storage(p)     * t1
+            hrv_livecrootn_storage_to_litter(p)          = livecrootn_storage(p)     * t1
+            hrv_deadcrootc_storage_to_litter(p)          = deadcrootc_storage(p)     * t1
+            hrv_deadcrootn_storage_to_litter(p)          = deadcrootn_storage(p)     * t1
+            hrv_gresp_storage_to_litter(p)               = gresp_storage(p)          * t1
+
+            ! transfer pools
+            hrv_leafc_xfer_to_litter(p)               = leafc_xfer(p)                * t1
+            hrv_leafn_xfer_to_litter(p)               = leafn_xfer(p)                * t1
+            hrv_frootc_xfer_to_litter(p)              = frootc_xfer(p)               * t1
+            hrv_frootn_xfer_to_litter(p)              = frootn_xfer(p)               * t1
+            hrv_livestemc_xfer_to_litter(p)           = livestemc_xfer(p)            * t1
+            hrv_livestemn_xfer_to_litter(p)           = livestemn_xfer(p)            * t1
+            hrv_deadstemc_xfer_to_litter(p)           = deadstemc_xfer(p)            * t1
+            hrv_deadstemn_xfer_to_litter(p)           = deadstemn_xfer(p)            * t1
+            hrv_livecrootc_xfer_to_litter(p)          = livecrootc_xfer(p)           * t1
+            hrv_livecrootn_xfer_to_litter(p)          = livecrootn_xfer(p)           * t1
+            hrv_deadcrootc_xfer_to_litter(p)          = deadcrootc_xfer(p)           * t1
+            hrv_deadcrootn_xfer_to_litter(p)          = deadcrootn_xfer(p)           * t1
+            hrv_gresp_xfer_to_litter(p)               = gresp_xfer(p)                * t1
+            
+            ! retransn pools
+            hrv_retransn_to_litter(p)                 = retransn(p)                  * t1
+
+         end if ! end orchard rotation
 
       end do ! end patch loop
 
