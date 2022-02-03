@@ -3430,11 +3430,11 @@ contains
          grainn_to_food        =>    cnveg_nitrogenflux_inst%grainn_to_food_patch      , & ! Output: [real(r8) (:) ]  grain N to food (gN/m2/s)                                   
          grainn_to_seed        =>    cnveg_nitrogenflux_inst%grainn_to_seed_patch      , & ! Output: [real(r8) (:) ]  grain N to seed (gN/m2/s)
          leafn_to_biofueln     =>    cnveg_nitrogenflux_inst%leafn_to_biofueln_patch   , & ! Output: [real(r8) (:) ]  leaf N to biofuel N (gN/m2/s)
-         livestemn_to_biofueln =>    cnveg_nitrogenflux_inst%livestemn_to_biofueln_patch, & ! Output: [real(r8) (:) ]  livestem N to biofuel N (gN/m2/s)     
+         livestemn_to_biofueln =>    cnveg_nitrogenflux_inst%livestemn_to_biofueln_patch , & ! Output: [real(r8) (:) ]  livestem N to biofuel N (gN/m2/s)     
          leafn_to_litter       =>    cnveg_nitrogenflux_inst%leafn_to_litter_patch     , & ! Output: [real(r8) (:) ]  leaf N litterfall (gN/m2/s)                       
          leafn_to_retransn     =>    cnveg_nitrogenflux_inst%leafn_to_retransn_patch   , & ! Input: [real(r8) (:) ]  leaf N to retranslocated N pool (gN/m2/s)         
          free_retransn_to_npool=>    cnveg_nitrogenflux_inst%free_retransn_to_npool_patch  , & ! Input: [real(r8) (:) ] free leaf N to retranslocated N pool (gN/m2/s)          
-         paid_retransn_to_npool=>    cnveg_nitrogenflux_inst%retransn_to_npool_patch, & ! Input: [real(r8) (:) ] free leaf N to retranslocated N pool (gN/m2/s)          
+         paid_retransn_to_npool=>    cnveg_nitrogenflux_inst%retransn_to_npool_patch   , & ! Input: [real(r8) (:) ] free leaf N to retranslocated N pool (gN/m2/s)          
          frootn_to_litter      =>    cnveg_nitrogenflux_inst%frootn_to_litter_patch    , & ! Output: [real(r8) (:) ]  fine root N litterfall (gN/m2/s)                  
          leafc_to_litter_fun   =>    cnveg_carbonflux_inst%leafc_to_litter_fun_patch   , & ! Output:  [real(r8) (:) ]  leaf C litterfall used by FUN (gC/m2/s)
          leafcn_offset         =>    cnveg_state_inst%leafcn_offset_patch               & ! Output:  [real(r8) (:) ]  Leaf C:N used by FUN
@@ -3982,28 +3982,35 @@ contains
   end subroutine CNCropHarvestToProductPools
 
   !-----------------------------------------------------------------------
-  subroutine CNLitterToColumn (bounds, num_soilc, filter_soilc,         &
-       cnveg_state_inst,cnveg_carbonflux_inst, cnveg_nitrogenflux_inst, &
-       leaf_prof_patch, froot_prof_patch)
+  subroutine CNLitterToColumn (bounds, num_soilc, filter_soilc, num_soilp, filter_soilp        &
+       cnveg_state_inst, soilbiogeochem_state_inst,cnveg_carbonflux_inst, cnveg_nitrogenflux_inst, &
+       cnveg_carbonstate_inst, cnveg_nitrogenstate_inst, leaf_prof_patch, froot_prof_patch, stem_prof_patch)
     !
     ! !DESCRIPTION:
     ! called at the end of cn_phenology to gather all patch-level litterfall fluxes
     ! to the column level and assign them to the three litter pools
     !
     ! !USES:
-    use clm_varpar , only : max_patch_per_col, nlevdecomp
+    use clm_varpar , only : max_patch_per_col, maxsoil_patches,nlevdecomp
     use pftconMod  , only : npcropmin
     use clm_varctl , only : use_grainproduct
+    use dynHarvestMod , only: CNHarvestPftToColumn
     !
     ! !ARGUMENTS:
     type(bounds_type)               , intent(in)    :: bounds
     integer                         , intent(in)    :: num_soilc       ! number of soil columns in filter
     integer                         , intent(in)    :: filter_soilc(:) ! filter for soil columns
+    integer                         , intent(in)    :: num_soilp       ! number of soil patches in filter
+    integer                         , intent(in)    :: filter_soilp(:) ! patch filter for soil points
     type(cnveg_state_type)          , intent(in)    :: cnveg_state_inst
     type(cnveg_carbonflux_type)     , intent(inout) :: cnveg_carbonflux_inst
     type(cnveg_nitrogenflux_type)   , intent(inout) :: cnveg_nitrogenflux_inst
+    type(cnveg_carbonstate_type)    , intent(in)    :: cnveg_carbonstate_inst
+    type(cnveg_nitrogenstate_type)  , intent(in)    :: cnveg_nitrogenstate_inst
+    type(soilbiogeochem_state_type) , intent(in)    :: soilbiogeochem_state_inst
     real(r8)                        , intent(in)    :: leaf_prof_patch(bounds%begp:,1:)
     real(r8)                        , intent(in)    :: froot_prof_patch(bounds%begp:,1:)
+    real(r8)                        , intent(in)    :: stem_prof_patch(bounds%begp:,1:)
     !
     ! !LOCAL VARIABLES:
     integer :: fc,c,pi,p,j,i     ! indices
@@ -4011,28 +4018,45 @@ contains
 
     SHR_ASSERT_ALL_FL((ubound(leaf_prof_patch)   == (/bounds%endp,nlevdecomp_full/)), sourcefile, __LINE__)
     SHR_ASSERT_ALL_FL((ubound(froot_prof_patch)  == (/bounds%endp,nlevdecomp_full/)), sourcefile, __LINE__)
+    SHR_ASSERT_ALL((ubound(stem_prof_patch)   == (/bounds%endp,nlevdecomp_full/)), errMsg(sourcefile, __LINE__))
 
     associate(                                                                                & 
          leaf_prof                 => leaf_prof_patch                                       , & ! Input:  [real(r8) (:,:) ]  (1/m) profile of leaves                         
          froot_prof                => froot_prof_patch                                      , & ! Input:  [real(r8) (:,:) ]  (1/m) profile of fine roots                     
+         stem_prof                 => stem_prof_patch                                       , & ! Input:  [real(r8) (:,:) ]  (1/m) profile of stems
 
          ivt                       => patch%itype                                             , & ! Input:  [integer  (:)   ]  patch vegetation type                                
          wtcol                     => patch%wtcol                                             , & ! Input:  [real(r8) (:)   ]  weight (relative to column) for this patch (0-1)    
 
          lf_f                      => pftcon%lf_f                                           , & ! Input:  leaf litter fractions
          fr_f                      => pftcon%fr_f                                           , & ! Input:  fine root litter fractions
+         perennial                 => pftcon%perennial                                      , & ! Input:  binary flag for perennial crop types
+         mulch_pruning             => pftcon%mulch_pruning                                  , & ! Input:  binary flag for mulching or exporting of pruning material
+
+         prune_flag                => cnveg_state_inst%prune_flag_patch                     , & ! Input: binary flag for pruning of perennial crop types
+         offset2_flag              => cnveg_state_inst%offset2_flag_patch                   , & ! Input: binary flag for rotation of perennial crop types
 
          leafc_to_litter           => cnveg_carbonflux_inst%leafc_to_litter_patch           , & ! Input:  [real(r8) (:)   ]  leaf C litterfall (gC/m2/s)                       
          frootc_to_litter          => cnveg_carbonflux_inst%frootc_to_litter_patch          , & ! Input:  [real(r8) (:)   ]  fine root N litterfall (gN/m2/s)                  
-         livestemc_to_litter       => cnveg_carbonflux_inst%livestemc_to_litter_patch       , & ! Input:  [real(r8) (:)   ]  live stem C litterfall (gC/m2/s)                  
+         livestemc_to_litter       => cnveg_carbonflux_inst%livestemc_to_litter_patch       , & ! Input:  [real(r8) (:)   ]  live stem C litterfall (gC/m2/s)
+         prunec_to_litter          => cnveg_carbonflux_inst%prunec_to_litter_patch          , & ! Input: [real(r8) (:) ] pruning C litterfall (gC/m2/s)
+         prunec_storage_to_litter  => cnveg_carbonflux_inst%prunec_storage_to_litter_patch  , & ! Input: [real(r8) (:) ] pruning storage C litterfall (gC/m2/s)                  
          grainc_to_food            => cnveg_carbonflux_inst%grainc_to_food_patch            , & ! Input:  [real(r8) (:)   ]  grain C to food (gC/m2/s)                            
          phenology_c_to_litr_c     => cnveg_carbonflux_inst%phenology_c_to_litr_c_col       , & ! Output: [real(r8) (:,:,:) ]  C fluxes associated with phenology (litterfall and crop) to litter pools (gC/m3/s)
+         pwood_harvestc            => cnveg_carbonflux_inst%wood_harvestc_patch             , & ! Input: [real(r8) (:)   ]
+         cwood_harvestc            => cnveg_carbonflux_inst%wood_harvestc_col               , & ! InOut: [real(r8) (:)   ]
+         harvest_c_to_litr_c       => cnveg_carbonflux_inst%harvest_c_to_litr_c_col         , & ! InOut:  [real(r8) (:,:,:) ]  C fluxes associated with harvest to litter pools (gC/m3/s)
 
-         livestemn_to_litter       => cnveg_nitrogenflux_inst%livestemn_to_litter_patch     , & ! Input:  [real(r8) (:)   ]  livestem N to litter (gN/m2/s)                    
+         livestemn_to_litter       => cnveg_nitrogenflux_inst%livestemn_to_litter_patch     , & ! Input:  [real(r8) (:)   ]  livestem N to litter (gN/m2/s)  
+         prunen_to_litter          => cnveg_nitrogenflux_inst%prunen_to_litter_patch        , & ! Input: [real(r8) (:) ] pruning N litterfall (gN/m2/s)
+         prunen_storage_to_litter  => cnveg_nitrogenflux_inst%prunen_storage_to_litter_patch  , & ! Input: [real(r8) (:) ] pruning storage N litterfall (gN/m2/s)                  
          grainn_to_food            => cnveg_nitrogenflux_inst%grainn_to_food_patch          , & ! Input:  [real(r8) (:)   ]  grain N to food (gN/m2/s) 
          leafn_to_litter           => cnveg_nitrogenflux_inst%leafn_to_litter_patch         , & ! Input:  [real(r8) (:)   ]  leaf N litterfall (gN/m2/s)                       
          frootn_to_litter          => cnveg_nitrogenflux_inst%frootn_to_litter_patch        , & ! Input:  [real(r8) (:)   ]  fine root N litterfall (gN/m2/s)                  
-         phenology_n_to_litr_n     => cnveg_nitrogenflux_inst%phenology_n_to_litr_n_col       & ! Output: [real(r8) (:,:,:) ]  N fluxes associated with phenology (litterfall and crop) to litter pools (gN/m3/s)
+         phenology_n_to_litr_n     => cnveg_nitrogenflux_inst%phenology_n_to_litr_n_col     , & ! Output: [real(r8) (:,:,:) ]  N fluxes associated with phenology (litterfall and crop) to litter pools (gN/m3/s)
+         pwood_harvestn            => cnveg_nitrogenflux_inst%wood_harvestn_patch           , & ! Input: [real(r8) (:)   ]
+         cwood_harvestn            => cnveg_nitrogenflux_inst%wood_harvestn_col             , & ! InOut: [real(r8) (:)   ]
+         harvest_n_to_litr_met_n   => cnveg_nitrogenflux_inst%harvest_n_to_litr_met_n_col     & ! InOut: [real(r8) (:,:) ]  N fluxes associated with harvest to litter metabolic pool (gN/m3/s)
          )
     
       do j = 1, nlevdecomp
@@ -4072,17 +4096,19 @@ contains
                      ! also for simplicity I've put "food" into the litter pools
 
                      if (ivt(p) >= npcropmin) then ! add livestemc to litter
-                        do i = i_litr_min, i_litr_max
-                           ! stem litter carbon fluxes
-                           phenology_c_to_litr_c(c,j,i) = &
-                              phenology_c_to_litr_c(c,j,i) + &
-                              livestemc_to_litter(p) * lf_f(ivt(p),i) * wtcol(p) * leaf_prof(p,j)
+                        if ( perennial(ivt(p)) == 0._r8) then
+                           do i = i_litr_min, i_litr_max
+                              ! stem litter carbon fluxes
+                              phenology_c_to_litr_c(c,j,i) = &
+                                 phenology_c_to_litr_c(c,j,i) + &
+                                 livestemc_to_litter(p) * lf_f(ivt(p),i) * wtcol(p) * leaf_prof(p,j)
 
-                           ! stem litter nitrogen fluxes
-                           phenology_n_to_litr_n(c,j,i) = &
-                              phenology_n_to_litr_n(c,j,i) + &
-                              livestemn_to_litter(p) * lf_f(ivt(p),i) * wtcol(p) * leaf_prof(p,j)
-                        end do
+                              ! stem litter nitrogen fluxes
+                              phenology_n_to_litr_n(c,j,i) = &
+                                 phenology_n_to_litr_n(c,j,i) + &
+                                 livestemn_to_litter(p) * lf_f(ivt(p),i) * wtcol(p) * leaf_prof(p,j)
+                           end do
+                        end if
 
                         if (.not. use_grainproduct) then
                          do i = i_litr_min, i_litr_max
@@ -4098,6 +4124,31 @@ contains
                          end do
                         end if
 
+                        if ( perennial(ivt(p)) == 1._r8 .and. prune_flag(p) == 1._r8) then
+                           if (mulch_pruning(ivt(p)) == 0._r8) then
+                              ! export pruning material as harvest
+                              ! storage harvest mortality carbon fluxes
+                              harvest_c_to_litr_c(c,j,i_met_lit)  = harvest_c_to_litr_c(c,j,i_met_lit) + &
+                                 hrv_deadstemc_storage_to_litter(p)  * wtcol(p) * stem_prof(p,j)
+                              ! storage harvest mortality nitrogen fluxes
+                              harvest_n_to_litr_n(c,j,i_met_lit)  = harvest_n_to_litr_n(c,j,i_met_lit) + &
+                                 hrv_deadstemn_storage_to_litter(p)  * wtcol(p) * stem_prof(p,j)
+
+                           else if (mulch_pruning(ivt(p)) == 1._r8) then
+                              ! add pruning material to litter
+                              ! pruning carbon fluxes
+                              phenology_c_to_litr_c(c,j,i) = &
+                                 phenology_c_to_litr_c(c,j,i) + &
+                                 prunec_to_litter(p) * lf_f(ivt(p),i) * wtcol(p) * stem_prof(p,j) + &
+                                 prunec_storage_to_litter(p) * lf_f(ivt(p),i) * wtcol(p) * stem_prof(p,j)
+
+                              ! pruning nitrogen fluxes
+                              phenology_n_to_litr_n(c,j,i) = &
+                                 phenology_n_to_litr_n(c,j,i) + &
+                                 prunen_to_litter(p) * lf_f(ivt(p),i) * wtcol(p) * stem_prof(p,j) + &
+                                 prunen_storage_to_litter(p) * lf_f(ivt(p),i) * wtcol(p) * stem_prof(p,j)
+                           end if
+                       end if  !end if perennial 
 
                      end if
                   end if
@@ -4107,6 +4158,35 @@ contains
 
          end do
       end do
+
+      do pi = 1,maxsoil_patches
+        do fc = 1,num_soilc
+           c = filter_soilc(fc)
+
+           if (pi <=  col%npatches(c)) then
+              p = col%patchi(c) + pi - 1
+              if (perennial(ivt(p)) == 1._r8 .and. prune_flag(p) == 1._r8 .and. mulch_pruning(ivt(p)) == 0._r8) then
+                 if (patch%active(p)) then
+                    ! wood harvest mortality carbon fluxes to product pools
+                    cwood_harvestc(c)  = cwood_harvestc(c)  + &
+                         pwood_harvestc(p)  * wtcol(p)
+
+                    ! wood harvest mortality nitrogen fluxes to product pools
+                    cwood_harvestn(c)  = cwood_harvestn(c)  + &
+                         pwood_harvestn(p)  * wtcol(p)
+                 end if
+              end if
+           end if
+
+        end do
+
+     end do
+
+     ! summarize all fuxes at orchard rotation to column level (added by O.Dombrowski)
+      if ( perennial(ivt(p)) == 1._r8 .and. offset2_flag(p) == 1._r8) then
+         call CNHarvestPftToColumn (num_soilc, filter_soilc, &
+              soilbiogeochem_state_inst, CNVeg_carbonflux_inst, cnveg_nitrogenflux_inst)
+      end if
 
     end associate 
 
