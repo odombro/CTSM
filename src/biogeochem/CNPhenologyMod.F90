@@ -22,6 +22,7 @@ module CNPhenologyMod
   use CanopyStateType                 , only : canopystate_type
   use CNDVType                        , only : dgvs_type
   use CNVegstateType                  , only : cnveg_state_type
+  use SoilBiogeochemStateType         , only : soilbiogeochem_state_type
   use CNVegCarbonStateType            , only : cnveg_carbonstate_type
   use CNVegCarbonFluxType             , only : cnveg_carbonflux_type
   use CNVegnitrogenstateType          , only : cnveg_nitrogenstate_type
@@ -121,6 +122,7 @@ module CNPhenologyMod
 
   integer, allocatable :: minplantjday(:,:) ! minimum planting julian day
   integer, allocatable :: maxplantjday(:,:) ! maximum planting julian day
+  integer, allocatable :: maxharvjday(:,:)  ! maximum harvest julian day (added by O.Dombrowski)
   integer              :: jdayyrstart(inSH) ! julian day of start of year
 
   real(r8), private :: initial_seed_at_planting        = 3._r8   ! Initial seed at planting
@@ -323,6 +325,7 @@ contains
     type(soilstate_type)           , intent(in)    :: soilstate_inst
     type(dgvs_type)                , intent(inout) :: dgvs_inst
     type(cnveg_state_type)         , intent(inout) :: cnveg_state_inst
+    type(soilbiogeochem_state_type) , intent(in)   :: soilbiogeochem_state_inst
     type(cnveg_carbonstate_type)   , intent(inout) :: cnveg_carbonstate_inst
     type(cnveg_carbonflux_type)    , intent(inout) :: cnveg_carbonflux_inst
     type(cnveg_nitrogenstate_type) , intent(inout) :: cnveg_nitrogenstate_inst
@@ -331,6 +334,7 @@ contains
     type(cnveg_carbonstate_type)   , intent(inout) :: c14_cnveg_carbonstate_inst
     real(r8)                       , intent(in)    :: leaf_prof_patch(bounds%begp:,1:)
     real(r8)                       , intent(in)    :: froot_prof_patch(bounds%begp:,1:)
+    real(r8)                       , intent(in)    :: stem_prof_patch(bounds%begp:,1:)
     integer                        , intent(in)    :: phase
     !-----------------------------------------------------------------------
 
@@ -792,6 +796,7 @@ contains
          woody                               =>    pftcon%woody                                                , & ! Input:  binary flag for woody lifeform (1=woody, 0=not woody)
          season_decid                        =>    pftcon%season_decid                                         , & ! Input:  binary flag for seasonal-deciduous leaf habit (0 or 1)
          season_decid_temperate              =>    pftcon%season_decid_temperate                               , & ! Input:  binary flag for seasonal-deciduous temperate leaf habit (0 or 1)
+         perennial                           =>    pftcon%perennial                                            , & ! Input:  binary flag for perennial crop types (0 or 1) (added by O.Dombrowski)
          
          t_soisno                            =>    temperature_inst%t_soisno_col                               , & ! Input:  [real(r8)  (:,:) ]  soil temperature (Kelvin)  (-nlevsno+1:nlevgrnd)
          soila10                             =>    temperature_inst%soila10_col                                , & ! Input:  [real(r8) (:)   ] 
@@ -878,7 +883,7 @@ contains
          c = patch%column(p)
          g = patch%gridcell(p)
 
-         if (season_decid(ivt(p)) == 1._r8) then
+         if (season_decid(ivt(p)) == 1._r8 .and. perennial(ivt(p)) == 0._r8) then
 
             ! set background litterfall rate, background transfer rate, and
             ! long growing season factor to 0 for seasonal deciduous types
