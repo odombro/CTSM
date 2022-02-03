@@ -2390,6 +2390,7 @@ contains
          hybgdd            =>    pftcon%hybgdd                                 , & ! Input:  
          lfemerg           =>    pftcon%lfemerg                                , & ! Input:  
          grnfill           =>    pftcon%grnfill                               , & ! Input:  
+         perennial         =>    pftcon%perennial                             , & ! Input:  [integer (:)  ]  binary flag for perennial crop phenology (1=perennial, 0= not perennial) (added by O.Dombrowski)
 
          t_ref2m_min       =>    temperature_inst%t_ref2m_min_patch            , & ! Input:  [real(r8) (:) ]  daily minimum of average 2 m height surface air temperature (K)
          t10               =>    temperature_inst%t_a10_patch                  , & ! Input:  [real(r8) (:) ]  10-day running mean of the 2 m temperature (K)    
@@ -2452,375 +2453,377 @@ contains
          g = patch%gridcell(p)
          h = inhemi(p)
 
-         ! background litterfall and transfer rates; long growing season factor
+         if (perennial(ivt(p)) == 0._r8) then
+            ! background litterfall and transfer rates; long growing season factor
 
-         bglfr(p) = 0._r8 ! this value changes later in a crop's life cycle
-         bgtr(p)  = 0._r8
-         lgsf(p)  = 0._r8
+            bglfr(p) = 0._r8 ! this value changes later in a crop's life cycle
+            bgtr(p)  = 0._r8
+            lgsf(p)  = 0._r8
 
-         ! ---------------------------------
-         ! from AgroIBIS subroutine planting
-         ! ---------------------------------
+            ! ---------------------------------
+            ! from AgroIBIS subroutine planting
+            ! ---------------------------------
 
-         ! in order to allow a crop to be planted only once each year
-         ! initialize cropplant = .false., but hold it = .true. through the end of the year
+            ! in order to allow a crop to be planted only once each year
+            ! initialize cropplant = .false., but hold it = .true. through the end of the year
 
-         ! initialize other variables that are calculated for crops
-         ! on an annual basis in cropresidue subroutine
+            ! initialize other variables that are calculated for crops
+            ! on an annual basis in cropresidue subroutine
 
-         if ( jday == jdayyrstart(h) .and. mcsec == 0 )then
+            if ( jday == jdayyrstart(h) .and. mcsec == 0 )then
 
-            ! make sure variables aren't changed at beginning of the year
-            ! for a crop that is currently planted, such as
-            ! WINTER TEMPERATE CEREAL = winter (wheat + barley + rye)
-            ! represented here by the winter wheat pft
+               ! make sure variables aren't changed at beginning of the year
+               ! for a crop that is currently planted, such as
+               ! WINTER TEMPERATE CEREAL = winter (wheat + barley + rye)
+               ! represented here by the winter wheat pft
 
-            if (.not. croplive(p))  then
-               cropplant(p) = .false.
-               idop(p)      = NOT_Planted
+               if (.not. croplive(p))  then
+                  cropplant(p) = .false.
+                  idop(p)      = NOT_Planted
 
-               ! keep next for continuous, annual winter temperate cereal crop;
-               ! if we removed elseif,
-               ! winter cereal grown continuously would amount to a cereal/fallow
-               ! rotation because cereal would only be planted every other year
+                  ! keep next for continuous, annual winter temperate cereal crop;
+                  ! if we removed elseif,
+                  ! winter cereal grown continuously would amount to a cereal/fallow
+                  ! rotation because cereal would only be planted every other year
 
-            else if (croplive(p) .and. (ivt(p) == nwwheat .or. ivt(p) == nirrig_wwheat)) then
-               cropplant(p) = .false.
-               !           else ! not possible to have croplive and ivt==cornORsoy? (slevis)
+               else if (croplive(p) .and. (ivt(p) == nwwheat .or. ivt(p) == nirrig_wwheat)) then
+                  cropplant(p) = .false.
+                  !           else ! not possible to have croplive and ivt==cornORsoy? (slevis)
+               end if
+
             end if
 
-         end if
+            if ( (.not. croplive(p)) .and. (.not. cropplant(p)) ) then
+ 
+               ! gdd needed for * chosen crop and a likely hybrid (for that region) *
+               ! to reach full physiological maturity
 
-         if ( (.not. croplive(p)) .and. (.not. cropplant(p)) ) then
+               ! based on accumulated seasonal average growing degree days from
+               ! April 1 - Sept 30 (inclusive)
+               ! for corn and soybeans in the United States -
+               ! decided upon by what the typical average growing season length is
+               ! and the gdd needed to reach maturity in those regions
 
-            ! gdd needed for * chosen crop and a likely hybrid (for that region) *
-            ! to reach full physiological maturity
+               ! first choice is used for spring temperate cereal and/or soybeans and maize
 
-            ! based on accumulated seasonal average growing degree days from
-            ! April 1 - Sept 30 (inclusive)
-            ! for corn and soybeans in the United States -
-            ! decided upon by what the typical average growing season length is
-            ! and the gdd needed to reach maturity in those regions
+               ! slevis: ibis reads xinpdate in io.f from control.crops.nc variable name 'plantdate'
+               !         According to Chris Kucharik, the dataset of
+               !         xinpdate was generated from a previous model run at 0.5 deg resolution
 
-            ! first choice is used for spring temperate cereal and/or soybeans and maize
+               ! winter temperate cereal : use gdd0 as a limit to plant winter cereal
 
-            ! slevis: ibis reads xinpdate in io.f from control.crops.nc variable name 'plantdate'
-            !         According to Chris Kucharik, the dataset of
-            !         xinpdate was generated from a previous model run at 0.5 deg resolution
+               if (ivt(p) == nwwheat .or. ivt(p) == nirrig_wwheat) then
 
-            ! winter temperate cereal : use gdd0 as a limit to plant winter cereal
+                  ! add check to only plant winter cereal after other crops (soybean, maize)
+                  ! have been harvested
 
-            if (ivt(p) == nwwheat .or. ivt(p) == nirrig_wwheat) then
+                  ! *** remember order of planting is crucial - in terms of which crops you want
+                  ! to be grown in what order ***
 
-               ! add check to only plant winter cereal after other crops (soybean, maize)
-               ! have been harvested
+                  ! in this case, corn or soybeans are assumed to be planted before
+                  ! cereal would be in any particular year that both patches are allowed
+                  ! to grow in the same grid cell (e.g., double-cropping)
 
-               ! *** remember order of planting is crucial - in terms of which crops you want
-               ! to be grown in what order ***
+                  ! slevis: harvdate below needs cropplant(p) above to be cropplant(p,ivt(p))
+                  !         where ivt(p) has rotated to winter cereal because
+                  !         cropplant through the end of the year for a harvested crop.
+                  !         Also harvdate(p) should be harvdate(p,ivt(p)) and should be
+                  !         updated on Jan 1st instead of at harvest (slevis)
 
-               ! in this case, corn or soybeans are assumed to be planted before
-               ! cereal would be in any particular year that both patches are allowed
-               ! to grow in the same grid cell (e.g., double-cropping)
+                  ! Are all the normal requirements for planting met?
+                  do_plant_normal = a5tmin(p)   /= spval                  .and. &
+                                    a5tmin(p)   <= minplanttemp(ivt(p))   .and. &
+                                    jday        >= minplantjday(ivt(p),h) .and. &
+                                    (gdd020(p)  /= spval                  .and. &
+                                    gdd020(p)   >= gddmin(ivt(p)))
+                  ! If not, but it's the last day of the planting window, what about relaxed rules?
+                  do_plant_lastchance = (.not. do_plant_normal)               .and. &
+                                        jday       >=  maxplantjday(ivt(p),h) .and. &
+                                        gdd020(p)  /= spval                   .and. &
+                                        gdd020(p)  >= gddmin(ivt(p))
 
-               ! slevis: harvdate below needs cropplant(p) above to be cropplant(p,ivt(p))
-               !         where ivt(p) has rotated to winter cereal because
-               !         cropplant through the end of the year for a harvested crop.
-               !         Also harvdate(p) should be harvdate(p,ivt(p)) and should be
-               !         updated on Jan 1st instead of at harvest (slevis)
+                  if (do_plant_normal .or. do_plant_lastchance) then
 
-               ! Are all the normal requirements for planting met?
-               do_plant_normal = a5tmin(p)   /= spval                  .and. &
-                                 a5tmin(p)   <= minplanttemp(ivt(p))   .and. &
-                                 jday        >= minplantjday(ivt(p),h) .and. &
-                                 (gdd020(p)  /= spval                  .and. &
-                                 gdd020(p)   >= gddmin(ivt(p)))
-               ! If not, but it's the last day of the planting window, what about relaxed rules?
-               do_plant_lastchance = (.not. do_plant_normal)               .and. &
-                                     jday       >=  maxplantjday(ivt(p),h) .and. &
-                                     gdd020(p)  /= spval                   .and. &
-                                     gdd020(p)  >= gddmin(ivt(p))
+                     cumvd(p)       = 0._r8
+                     hdidx(p)       = 0._r8
+                     vf(p)          = 0._r8
+                   
+                     call PlantCrop(p, leafcn(ivt(p)), jday, crop_inst, cnveg_state_inst, &
+                                    cnveg_carbonstate_inst, cnveg_nitrogenstate_inst, &
+                                    cnveg_carbonflux_inst, cnveg_nitrogenflux_inst, &
+                                    c13_cnveg_carbonstate_inst, c14_cnveg_carbonstate_inst)
 
-               if (do_plant_normal .or. do_plant_lastchance) then
-
-                  cumvd(p)       = 0._r8
-                  hdidx(p)       = 0._r8
-                  vf(p)          = 0._r8
-                  
-                  call PlantCrop(p, leafcn(ivt(p)), jday, crop_inst, cnveg_state_inst, &
-                                 cnveg_carbonstate_inst, cnveg_nitrogenstate_inst, &
-                                 cnveg_carbonflux_inst, cnveg_nitrogenflux_inst, &
-                                 c13_cnveg_carbonstate_inst, c14_cnveg_carbonstate_inst)
-
-                  gddmaturity(p) = hybgdd(ivt(p))
-
-               else
-                  gddmaturity(p) = 0._r8
-               end if
-
-            else ! not winter cereal... slevis: added distinction between NH and SH
-               ! slevis: The idea is that jday will equal idop sooner or later in the year
-               !         while the gdd part is either true or false for the year.
-
-               ! Are all the normal requirements for planting met?
-               do_plant_normal = t10(p) /= spval .and. a10tmin(p) /= spval .and. &
-                                 t10(p)     > planttemp(ivt(p))            .and. &
-                                 a10tmin(p) > minplanttemp(ivt(p))         .and. &
-                                 jday       >= minplantjday(ivt(p),h)      .and. &
-                                 jday       <= maxplantjday(ivt(p),h)      .and. &
-                                 gdd820(p)  /= spval                       .and. &
-                                 gdd820(p)  >= gddmin(ivt(p))
-               ! If not, but it's the last day of the planting window, what about relaxed rules?
-               do_plant_lastchance = (.not. do_plant_normal) .and. &
-                                     jday == maxplantjday(ivt(p),h) .and. &
-                                     gdd820(p) > 0._r8 .and. &
-                                     gdd820(p) /= spval
-
-               if (do_plant_normal .or. do_plant_lastchance) then
-
-                  call PlantCrop(p, leafcn(ivt(p)), jday, crop_inst, cnveg_state_inst, &
-                                 cnveg_carbonstate_inst, cnveg_nitrogenstate_inst, &
-                                 cnveg_carbonflux_inst, cnveg_nitrogenflux_inst, &
-                                 c13_cnveg_carbonstate_inst, c14_cnveg_carbonstate_inst)
-
-                  ! go a specified amount of time before/after
-                  ! climatological date
-                  if (ivt(p) == ntmp_soybean .or. ivt(p) == nirrig_tmp_soybean .or. &
-                       ivt(p) == ntrp_soybean .or. ivt(p) == nirrig_trp_soybean) then
-                     gddmaturity(p) = min(gdd1020(p), hybgdd(ivt(p)))
+                     gddmaturity(p) = hybgdd(ivt(p))
+ 
+                  else
+                     gddmaturity(p) = 0._r8
                   end if
-                  
-                  if (ivt(p) == ntmp_corn .or. ivt(p) == nirrig_tmp_corn .or. &
-                      ivt(p) == ntrp_corn .or. ivt(p) == nirrig_trp_corn .or. &
-                      ivt(p) == nsugarcane .or. ivt(p) == nirrig_sugarcane .or. &
-                      ivt(p) == nmiscanthus .or. ivt(p) == nirrig_miscanthus .or. &
-                      ivt(p) == nswitchgrass .or. ivt(p) == nirrig_switchgrass) then
-                     gddmaturity(p) = max(950._r8, min(gdd820(p)*0.85_r8, hybgdd(ivt(p))))
-                     if (do_plant_normal) then
-                        gddmaturity(p) = max(950._r8, min(gddmaturity(p)+150._r8, 1850._r8))
+
+               else ! not winter cereal... slevis: added distinction between NH and SH
+                  ! slevis: The idea is that jday will equal idop sooner or later in the year
+                  !         while the gdd part is either true or false for the year.
+
+                  ! Are all the normal requirements for planting met?
+                  do_plant_normal = t10(p) /= spval .and. a10tmin(p) /= spval .and. &
+                                    t10(p)     > planttemp(ivt(p))            .and. &
+                                    a10tmin(p) > minplanttemp(ivt(p))         .and. &
+                                    jday       >= minplantjday(ivt(p),h)      .and. &
+                                    jday       <= maxplantjday(ivt(p),h)      .and. &
+                                    gdd820(p)  /= spval                       .and. &
+                                    gdd820(p)  >= gddmin(ivt(p))
+                  ! If not, but it's the last day of the planting window, what about relaxed rules?
+                  do_plant_lastchance = (.not. do_plant_normal) .and. &
+                                        jday == maxplantjday(ivt(p),h) .and. &
+                                        gdd820(p) > 0._r8 .and. &
+                                        gdd820(p) /= spval
+
+                  if (do_plant_normal .or. do_plant_lastchance) then
+
+                     call PlantCrop(p, leafcn(ivt(p)), jday, crop_inst, cnveg_state_inst, &
+                                    cnveg_carbonstate_inst, cnveg_nitrogenstate_inst, &
+                                    cnveg_carbonflux_inst, cnveg_nitrogenflux_inst, &
+                                    c13_cnveg_carbonstate_inst, c14_cnveg_carbonstate_inst)
+
+                     ! go a specified amount of time before/after
+                     ! climatological date
+                     if (ivt(p) == ntmp_soybean .or. ivt(p) == nirrig_tmp_soybean .or. &
+                          ivt(p) == ntrp_soybean .or. ivt(p) == nirrig_trp_soybean) then
+                        gddmaturity(p) = min(gdd1020(p), hybgdd(ivt(p)))
                      end if
-                  end if
-                  if (ivt(p) == nswheat .or. ivt(p) == nirrig_swheat .or. &
-                      ivt(p) == ncotton .or. ivt(p) == nirrig_cotton .or. &
-                      ivt(p) == nrice   .or. ivt(p) == nirrig_rice) then
-                     gddmaturity(p) = min(gdd020(p), hybgdd(ivt(p)))
-                  end if
+                  
+                     if (ivt(p) == ntmp_corn .or. ivt(p) == nirrig_tmp_corn .or. &
+                         ivt(p) == ntrp_corn .or. ivt(p) == nirrig_trp_corn .or. &
+                         ivt(p) == nsugarcane .or. ivt(p) == nirrig_sugarcane .or. &
+                         ivt(p) == nmiscanthus .or. ivt(p) == nirrig_miscanthus .or. &
+                         ivt(p) == nswitchgrass .or. ivt(p) == nirrig_switchgrass) then
+                        gddmaturity(p) = max(950._r8, min(gdd820(p)*0.85_r8, hybgdd(ivt(p))))
+                        if (do_plant_normal) then
+                           gddmaturity(p) = max(950._r8, min(gddmaturity(p)+150._r8, 1850._r8))
+                        end if
+                     end if
+                     if (ivt(p) == nswheat .or. ivt(p) == nirrig_swheat .or. &
+                         ivt(p) == ncotton .or. ivt(p) == nirrig_cotton .or. &
+                         ivt(p) == nrice   .or. ivt(p) == nirrig_rice) then
+                        gddmaturity(p) = min(gdd020(p), hybgdd(ivt(p)))
+                     end if
 
+                  else
+                     gddmaturity(p) = 0._r8
+                  end if
+               end if ! crop patch distinction
+
+               ! crop phenology (gdd thresholds) controlled by gdd needed for
+               ! maturity (physiological) which is based on the average gdd
+               ! accumulation and hybrids in United States from April 1 - Sept 30
+
+               ! calculate threshold from phase 1 to phase 2:
+               ! threshold for attaining leaf emergence (based on fraction of
+               ! gdd(i) -- climatological average)
+               ! Hayhoe and Dwyer, 1990, Can. J. Soil Sci 70:493-497
+               ! Carlson and Gage, 1989, Agric. For. Met., 45: 313-324
+               ! J.T. Ritchie, 1991: Modeling Plant and Soil systems
+
+               huileaf(p) = lfemerg(ivt(p)) * gddmaturity(p) ! 3-7% in cereal
+
+               ! calculate threshhold from phase 2 to phase 3:
+               ! from leaf emergence to beginning of grain-fill period
+               ! this hypothetically occurs at the end of tassling, not the beginning
+               ! tassel initiation typically begins at 0.5-0.55 * gddmaturity
+
+               ! calculate linear relationship between huigrain fraction and relative
+               ! maturity rating for maize
+
+               if (ivt(p) == ntmp_corn .or. ivt(p) == nirrig_tmp_corn .or. &
+                   ivt(p) == ntrp_corn .or. ivt(p) == nirrig_trp_corn .or. &
+                   ivt(p) == nsugarcane .or. ivt(p) == nirrig_sugarcane .or. &
+                   ivt(p) == nmiscanthus .or. ivt(p) == nirrig_miscanthus .or. &
+                   ivt(p) == nswitchgrass .or. ivt(p) == nirrig_switchgrass) then
+                  ! the following estimation of crmcorn from gddmaturity is based on a linear
+                  ! regression using data from Pioneer-brand corn hybrids (Kucharik, 2003,
+                  ! Earth Interactions 7:1-33: fig. 2)
+                  crmcorn = max(73._r8, min(135._r8, (gddmaturity(p)+ 53.683_r8)/13.882_r8))
+
+                  ! the following adjustment of grnfill based on crmcorn is based on a tuning
+                  ! of Agro-IBIS to give reasonable results for max LAI and the seasonal
+                  ! progression of LAI growth (pers. comm. C. Kucharik June 10, 2010)
+                  huigrain(p) = -0.002_r8  * (crmcorn - 73._r8) + grnfill(ivt(p))
+
+                  huigrain(p) = min(max(huigrain(p), grnfill(ivt(p))-0.1_r8), grnfill(ivt(p)))
+                  huigrain(p) = huigrain(p) * gddmaturity(p)     ! Cabelguenne et
                else
-                  gddmaturity(p) = 0._r8
+                  huigrain(p) = grnfill(ivt(p)) * gddmaturity(p) ! al. 1999
                end if
-            end if ! crop patch distinction
+
+            end if ! crop not live nor planted
+
+            ! ----------------------------------
+            ! from AgroIBIS subroutine phenocrop
+            ! ----------------------------------
+
+            ! all of the phenology changes are based on the total number of gdd needed
+            ! to change to the next phase - based on fractions of the total gdd typical
+            ! for  that region based on the April 1 - Sept 30 window of development
 
             ! crop phenology (gdd thresholds) controlled by gdd needed for
             ! maturity (physiological) which is based on the average gdd
             ! accumulation and hybrids in United States from April 1 - Sept 30
 
-            ! calculate threshold from phase 1 to phase 2:
-            ! threshold for attaining leaf emergence (based on fraction of
-            ! gdd(i) -- climatological average)
-            ! Hayhoe and Dwyer, 1990, Can. J. Soil Sci 70:493-497
-            ! Carlson and Gage, 1989, Agric. For. Met., 45: 313-324
-            ! J.T. Ritchie, 1991: Modeling Plant and Soil systems
+            ! Phase 1: Planting to leaf emergence (now in CNAllocation)
+            ! Phase 2: Leaf emergence to beginning of grain fill (general LAI accumulation)
+            ! Phase 3: Grain fill to physiological maturity and harvest (LAI decline)
+            ! Harvest: if gdd past grain fill initiation exceeds limit
+            ! or number of days past planting reaches a maximum, the crop has
+            ! reached physiological maturity and plant is harvested;
+            ! crop could be live or dead at this stage - these limits
+            ! could lead to reaching physiological maturity or determining
+            ! a harvest date for a crop killed by an early frost (see next comments)
+            ! --- --- ---
+            ! keeping comments without the code (slevis):
+            ! if minimum temperature, t_ref2m_min <= freeze kill threshold, tkill
+            ! for 3 consecutive days and lai is above a minimum,
+            ! plant will be damaged/killed. This function is more for spring freeze events
+            ! or for early fall freeze events
 
-            huileaf(p) = lfemerg(ivt(p)) * gddmaturity(p) ! 3-7% in cereal
+            ! spring temperate cereal is affected by this, winter cereal kill function
+            ! is determined in crops.f - is a more elaborate function of
+            ! cold hardening of the plant
 
-            ! calculate threshhold from phase 2 to phase 3:
-            ! from leaf emergence to beginning of grain-fill period
-            ! this hypothetically occurs at the end of tassling, not the beginning
-            ! tassel initiation typically begins at 0.5-0.55 * gddmaturity
+            ! currently simulates too many grid cells killed by freezing temperatures
 
-            ! calculate linear relationship between huigrain fraction and relative
-            ! maturity rating for maize
+            ! removed on March 12 2002 - C. Kucharik
+            ! until it can be a bit more refined, or used at a smaller scale.
+            ! we really have no way of validating this routine
+            ! too difficult to implement on 0.5 degree scale grid cells
+            ! --- --- ---
 
-            if (ivt(p) == ntmp_corn .or. ivt(p) == nirrig_tmp_corn .or. &
-                ivt(p) == ntrp_corn .or. ivt(p) == nirrig_trp_corn .or. &
-                ivt(p) == nsugarcane .or. ivt(p) == nirrig_sugarcane .or. &
-                ivt(p) == nmiscanthus .or. ivt(p) == nirrig_miscanthus .or. &
-                ivt(p) == nswitchgrass .or. ivt(p) == nirrig_switchgrass) then
-               ! the following estimation of crmcorn from gddmaturity is based on a linear
-               ! regression using data from Pioneer-brand corn hybrids (Kucharik, 2003,
-               ! Earth Interactions 7:1-33: fig. 2)
-               crmcorn = max(73._r8, min(135._r8, (gddmaturity(p)+ 53.683_r8)/13.882_r8))
+            onset_flag(p)  = 0._r8 ! CN terminology to trigger certain
+            offset_flag(p) = 0._r8 ! carbon and nitrogen transfers
 
-               ! the following adjustment of grnfill based on crmcorn is based on a tuning
-               ! of Agro-IBIS to give reasonable results for max LAI and the seasonal
-               ! progression of LAI growth (pers. comm. C. Kucharik June 10, 2010)
-               huigrain(p) = -0.002_r8  * (crmcorn - 73._r8) + grnfill(ivt(p))
+            if (croplive(p)) then
+               cphase(p) = 1._r8
 
-               huigrain(p) = min(max(huigrain(p), grnfill(ivt(p))-0.1_r8), grnfill(ivt(p)))
-               huigrain(p) = huigrain(p) * gddmaturity(p)     ! Cabelguenne et
-            else
-               huigrain(p) = grnfill(ivt(p)) * gddmaturity(p) ! al. 1999
-            end if
+               ! call vernalization if winter temperate cereal planted, living, and the
+               ! vernalization factor is not 1;
+               ! vf affects the calculation of gddtsoi & gddplant
 
-         end if ! crop not live nor planted
+               if (t_ref2m_min(p) < 1.e30_r8 .and. vf(p) /= 1._r8 .and. &
+                  (ivt(p) == nwwheat .or. ivt(p) == nirrig_wwheat)) then
+                  call vernalization(p, &
+                       canopystate_inst, temperature_inst, waterdiagnosticbulk_inst, cnveg_state_inst, &
+                       crop_inst)
+               end if
 
-         ! ----------------------------------
-         ! from AgroIBIS subroutine phenocrop
-         ! ----------------------------------
+               ! days past planting may determine harvest
 
-         ! all of the phenology changes are based on the total number of gdd needed
-         ! to change to the next phase - based on fractions of the total gdd typical
-         ! for  that region based on the April 1 - Sept 30 window of development
-
-         ! crop phenology (gdd thresholds) controlled by gdd needed for
-         ! maturity (physiological) which is based on the average gdd
-         ! accumulation and hybrids in United States from April 1 - Sept 30
-
-         ! Phase 1: Planting to leaf emergence (now in CNAllocation)
-         ! Phase 2: Leaf emergence to beginning of grain fill (general LAI accumulation)
-         ! Phase 3: Grain fill to physiological maturity and harvest (LAI decline)
-         ! Harvest: if gdd past grain fill initiation exceeds limit
-         ! or number of days past planting reaches a maximum, the crop has
-         ! reached physiological maturity and plant is harvested;
-         ! crop could be live or dead at this stage - these limits
-         ! could lead to reaching physiological maturity or determining
-         ! a harvest date for a crop killed by an early frost (see next comments)
-         ! --- --- ---
-         ! keeping comments without the code (slevis):
-         ! if minimum temperature, t_ref2m_min <= freeze kill threshold, tkill
-         ! for 3 consecutive days and lai is above a minimum,
-         ! plant will be damaged/killed. This function is more for spring freeze events
-         ! or for early fall freeze events
-
-         ! spring temperate cereal is affected by this, winter cereal kill function
-         ! is determined in crops.f - is a more elaborate function of
-         ! cold hardening of the plant
-
-         ! currently simulates too many grid cells killed by freezing temperatures
-
-         ! removed on March 12 2002 - C. Kucharik
-         ! until it can be a bit more refined, or used at a smaller scale.
-         ! we really have no way of validating this routine
-         ! too difficult to implement on 0.5 degree scale grid cells
-         ! --- --- ---
-
-         onset_flag(p)  = 0._r8 ! CN terminology to trigger certain
-         offset_flag(p) = 0._r8 ! carbon and nitrogen transfers
-
-         if (croplive(p)) then
-            cphase(p) = 1._r8
-
-            ! call vernalization if winter temperate cereal planted, living, and the
-            ! vernalization factor is not 1;
-            ! vf affects the calculation of gddtsoi & gddplant
-
-            if (t_ref2m_min(p) < 1.e30_r8 .and. vf(p) /= 1._r8 .and. &
-               (ivt(p) == nwwheat .or. ivt(p) == nirrig_wwheat)) then
-               call vernalization(p, &
-                    canopystate_inst, temperature_inst, waterdiagnosticbulk_inst, cnveg_state_inst, &
-                    crop_inst)
-            end if
-
-            ! days past planting may determine harvest
-
-            if (jday >= idop(p)) then
-               idpp = jday - idop(p)
-            else
-               idpp = int(dayspyr) + jday - idop(p)
-            end if
-
-            ! onset_counter initialized to zero when .not. croplive
-            ! offset_counter relevant only at time step of harvest
-
-            onset_counter(p) = onset_counter(p) - dt
-
-            ! enter phase 2 onset for one time step:
-            ! transfer seed carbon to leaf emergence
-
-            if (peaklai(p) >= 1) then
-               hui(p) = max(hui(p),huigrain(p))
-            endif
-
-            if (leafout(p) >= huileaf(p) .and. hui(p) < huigrain(p) .and. idpp < mxmat(ivt(p))) then
-               cphase(p) = 2._r8
-               if (abs(onset_counter(p)) > 1.e-6_r8) then
-                  onset_flag(p)    = 1._r8
-                  onset_counter(p) = dt
-                    fert_counter(p)  = ndays_on * secspday
-                    if (ndays_on .gt. 0) then
-                       fert(p) = (manunitro(ivt(p)) * 1000._r8 + fertnitro(p))/ fert_counter(p)
-                    else
-                       fert(p) = 0._r8
-                    end if
+               if (jday >= idop(p)) then
+                  idpp = jday - idop(p)
                else
-                  ! this ensures no re-entry to onset of phase2
-                  ! b/c onset_counter(p) = onset_counter(p) - dt
-                  ! at every time step
-
-                  onset_counter(p) = dt
+                  idpp = int(dayspyr) + jday - idop(p)
                end if
 
-               ! enter harvest for one time step:
-               ! - transfer live biomass to litter and to crop yield
-               ! - send xsmrpool to the atmosphere
-               ! if onset and harvest needed to last longer than one timestep
-               ! the onset_counter would change from dt and you'd need to make
-               ! changes to the offset subroutine below
+               ! onset_counter initialized to zero when .not. croplive
+               ! offset_counter relevant only at time step of harvest
 
-            else if (hui(p) >= gddmaturity(p) .or. idpp >= mxmat(ivt(p))) then
-               if (harvdate(p) >= NOT_Harvested) harvdate(p) = jday
-               croplive(p) = .false.     ! no re-entry in greater if-block
-               cphase(p) = 4._r8
-               if (tlai(p) > 0._r8) then ! plant had emerged before harvest
-                  offset_flag(p) = 1._r8
-                  offset_counter(p) = dt
-               else                      ! plant never emerged from the ground
-                  ! Revert planting transfers; this will replenish the crop seed deficit.
-                  ! We subtract from any existing value in crop_seedc_to_leaf /
-                  ! crop_seedn_to_leaf in the unlikely event that we enter this block of
-                  ! code in the same time step where the planting transfer originally
-                  ! occurred.
-                  crop_seedc_to_leaf(p) = crop_seedc_to_leaf(p) - leafc_xfer(p)/dt
-                  crop_seedn_to_leaf(p) = crop_seedn_to_leaf(p) - leafn_xfer(p)/dt
-                  leafc_xfer(p) = 0._r8
-                  leafn_xfer(p) = leafc_xfer(p) / leafcn(ivt(p))
-                  if (use_c13) then
-                     c13_cnveg_carbonstate_inst%leafc_xfer_patch(p) = 0._r8
-                  endif
-                  if (use_c14) then
-                     c14_cnveg_carbonstate_inst%leafc_xfer_patch(p) = 0._r8
-                  endif
+               onset_counter(p) = onset_counter(p) - dt
+ 
+               ! enter phase 2 onset for one time step:
+               ! transfer seed carbon to leaf emergence
 
+               if (peaklai(p) >= 1) then
+                  hui(p) = max(hui(p),huigrain(p))
+               endif
+
+               if (leafout(p) >= huileaf(p) .and. hui(p) < huigrain(p) .and. idpp < mxmat(ivt(p))) then
+                  cphase(p) = 2._r8
+                  if (abs(onset_counter(p)) > 1.e-6_r8) then
+                     onset_flag(p)    = 1._r8
+                     onset_counter(p) = dt
+                       fert_counter(p)  = ndays_on * secspday
+                       if (ndays_on .gt. 0) then
+                          fert(p) = (manunitro(ivt(p)) * 1000._r8 + fertnitro(p))/ fert_counter(p)
+                       else
+                          fert(p) = 0._r8
+                       end if
+                  else
+                     ! this ensures no re-entry to onset of phase2
+                     ! b/c onset_counter(p) = onset_counter(p) - dt
+                     ! at every time step
+
+                     onset_counter(p) = dt
+                  end if
+
+                  ! enter harvest for one time step:
+                  ! - transfer live biomass to litter and to crop yield
+                  ! - send xsmrpool to the atmosphere
+                  ! if onset and harvest needed to last longer than one timestep
+                  ! the onset_counter would change from dt and you'd need to make
+                  ! changes to the offset subroutine below
+
+               else if (hui(p) >= gddmaturity(p) .or. idpp >= mxmat(ivt(p))) then
+                  if (harvdate(p) >= NOT_Harvested) harvdate(p) = jday
+                  croplive(p) = .false.     ! no re-entry in greater if-block
+                  cphase(p) = 4._r8
+                  if (tlai(p) > 0._r8) then ! plant had emerged before harvest
+                     offset_flag(p) = 1._r8
+                     offset_counter(p) = dt
+                  else                      ! plant never emerged from the ground
+                     ! Revert planting transfers; this will replenish the crop seed deficit.
+                     ! We subtract from any existing value in crop_seedc_to_leaf /
+                     ! crop_seedn_to_leaf in the unlikely event that we enter this block of
+                     ! code in the same time step where the planting transfer originally
+                     ! occurred.
+                     crop_seedc_to_leaf(p) = crop_seedc_to_leaf(p) - leafc_xfer(p)/dt
+                     crop_seedn_to_leaf(p) = crop_seedn_to_leaf(p) - leafn_xfer(p)/dt
+                     leafc_xfer(p) = 0._r8
+                     leafn_xfer(p) = leafc_xfer(p) / leafcn(ivt(p))
+                     if (use_c13) then
+                        c13_cnveg_carbonstate_inst%leafc_xfer_patch(p) = 0._r8
+                     endif
+                     if (use_c14) then
+                        c14_cnveg_carbonstate_inst%leafc_xfer_patch(p) = 0._r8
+                     endif
+
+                  end if
+
+                  ! enter phase 3 while previous criteria fail and next is true;
+                  ! in terms of order, phase 3 occurs before harvest, but when
+                  ! harvest *can* occur, we want it to have first priority.
+                  ! AgroIBIS uses a complex formula for lai decline.
+                  ! Use CN's simple formula at least as a place holder (slevis)
+
+               else if (hui(p) >= huigrain(p)) then
+                  cphase(p) = 3._r8
+                  bglfr(p) = 1._r8/(leaf_long(ivt(p))*dayspyr*secspday)
                end if
 
-               ! enter phase 3 while previous criteria fail and next is true;
-               ! in terms of order, phase 3 occurs before harvest, but when
-               ! harvest *can* occur, we want it to have first priority.
-               ! AgroIBIS uses a complex formula for lai decline.
-               ! Use CN's simple formula at least as a place holder (slevis)
+               ! continue fertilizer application while in phase 2;
+               ! assumes that onset of phase 2 took one time step only
 
-            else if (hui(p) >= huigrain(p)) then
-               cphase(p) = 3._r8
-               bglfr(p) = 1._r8/(leaf_long(ivt(p))*dayspyr*secspday)
-            end if
+                 if (fert_counter(p) <= 0._r8) then
+                    fert(p) = 0._r8
+                 else ! continue same fert application every timestep
+                    fert_counter(p) = fert_counter(p) - dtrad
+                 end if
 
-            ! continue fertilizer application while in phase 2;
-            ! assumes that onset of phase 2 took one time step only
-
-              if (fert_counter(p) <= 0._r8) then
-                 fert(p) = 0._r8
-              else ! continue same fert application every timestep
-                 fert_counter(p) = fert_counter(p) - dtrad
-              end if
-
-         else   ! crop not live
-            ! next 2 lines conserve mass if leaf*_xfer > 0 due to interpinic.
-            ! We subtract from any existing value in crop_seedc_to_leaf /
-            ! crop_seedn_to_leaf in the unlikely event that we enter this block of
-            ! code in the same time step where the planting transfer originally
-            ! occurred.
-            crop_seedc_to_leaf(p) = crop_seedc_to_leaf(p) - leafc_xfer(p)/dt
-            crop_seedn_to_leaf(p) = crop_seedn_to_leaf(p) - leafn_xfer(p)/dt
-            onset_counter(p) = 0._r8
-            leafc_xfer(p) = 0._r8
-            leafn_xfer(p) = leafc_xfer(p) / leafcn(ivt(p))
-            if (use_c13) then
-               c13_cnveg_carbonstate_inst%leafc_xfer_patch(p) = 0._r8
-            endif
-            if (use_c14) then
-               c14_cnveg_carbonstate_inst%leafc_xfer_patch(p) = 0._r8
-            endif
-         end if ! croplive
+            else   ! crop not live
+               ! next 2 lines conserve mass if leaf*_xfer > 0 due to interpinic.
+               ! We subtract from any existing value in crop_seedc_to_leaf /
+               ! crop_seedn_to_leaf in the unlikely event that we enter this block of
+               ! code in the same time step where the planting transfer originally
+               ! occurred.
+               crop_seedc_to_leaf(p) = crop_seedc_to_leaf(p) - leafc_xfer(p)/dt
+               crop_seedn_to_leaf(p) = crop_seedn_to_leaf(p) - leafn_xfer(p)/dt
+               onset_counter(p) = 0._r8
+               leafc_xfer(p) = 0._r8
+               leafn_xfer(p) = leafc_xfer(p) / leafcn(ivt(p))
+               if (use_c13) then
+                  c13_cnveg_carbonstate_inst%leafc_xfer_patch(p) = 0._r8
+               endif
+               if (use_c14) then
+                  c14_cnveg_carbonstate_inst%leafc_xfer_patch(p) = 0._r8
+               endif
+            end if ! croplive
+         end if ! not perennial
 
       end do ! prognostic crops loop
 
