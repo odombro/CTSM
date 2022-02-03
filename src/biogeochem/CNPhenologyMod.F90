@@ -59,6 +59,7 @@ module CNPhenologyMod
   private :: CNSeasonDecidPhenology         ! Phenology for seasonal decidious platnts
   private :: CNStressDecidPhenology         ! Phenology for stress deciidous plants
   private :: CropPhenology                  ! Phenology for crops
+  private :: FruitTreePhenology             ! Phenology for seasonal deciduous fruit tree crops
   private :: CropPhenologyInit              ! Initialize phenology for crops
   private :: vernalization                  ! Vernalization (overwinterring) of crops
   private :: CNOnsetGrowth                  ! Leaf Onset growth
