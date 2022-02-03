@@ -1640,6 +1640,686 @@ contains
   end subroutine CNStressDecidPhenology
 
   !-----------------------------------------------------------------------
+
+  subroutine FruitTreePhenology(num_pcropp, filter_pcropp                     , &
+       waterdiagnosticbulk_inst, temperature_inst, crop_inst, canopystate_inst, cnveg_state_inst, dgvs_inst, &
+       cnveg_carbonstate_inst, cnveg_nitrogenstate_inst, cnveg_carbonflux_inst, cnveg_nitrogenflux_inst,&
+       c13_cnveg_carbonstate_inst, c14_cnveg_carbonstate_inst)
+
+    ! !DESCRIPTION:
+    ! Code from AgroIBIS adapted for deciduous fruit trees by O. Dombrowski (2022) to determine crop phenology and code from CN to
+    ! handle CN fluxes during the phenological onset & offset periods.
+    
+    ! !USES:
+    use shr_const_mod    , only : SHR_CONST_TKFRZ
+    use clm_time_manager , only : get_curr_date, get_curr_calday, get_curr_days_per_year, get_rad_step_size
+    use pftconMod        , only : ncitrus ! the citrus PFT is used for now, separate PFTs for deciduous fruit tree species may be added in the future
+    use pftconMod        , only : nirrig_citrus
+    use clm_varcon       , only : spval, secspday
+    use clm_varctl       , only : use_fertilizer 
+    use clm_varctl       , only : use_c13, use_c14
+    use clm_varcon       , only : c13ratio, c14ratio
+    !
+    ! !ARGUMENTS:
+    integer                        , intent(in)    :: num_pcropp       ! number of prog crop patches in filter
+    integer                        , intent(in)    :: filter_pcropp(:) ! filter for prognostic crop patches
+    type(waterdiagnosticbulk_type)      , intent(in)    :: waterdiagnosticbulk_inst
+    type(temperature_type)         , intent(in)    :: temperature_inst
+    type(crop_type)                , intent(inout) :: crop_inst
+    type(canopystate_type)         , intent(in)    :: canopystate_inst
+    type(cnveg_state_type)         , intent(inout) :: cnveg_state_inst
+    type(dgvs_type)                , intent(inout) :: dgvs_inst
+    type(cnveg_carbonstate_type)   , intent(inout) :: cnveg_carbonstate_inst
+    type(cnveg_nitrogenstate_type) , intent(inout) :: cnveg_nitrogenstate_inst
+    type(cnveg_carbonflux_type)    , intent(inout) :: cnveg_carbonflux_inst
+    type(cnveg_nitrogenflux_type)  , intent(inout) :: cnveg_nitrogenflux_inst
+    type(cnveg_carbonstate_type)   , intent(inout) :: c13_cnveg_carbonstate_inst
+    type(cnveg_carbonstate_type)   , intent(inout) :: c14_cnveg_carbonstate_inst
+    !
+    ! LOCAL VARAIBLES:
+    integer kyr       ! current year
+    integer kmo       ! month of year  (1, ..., 12)
+    integer kda       ! day of month   (1, ..., 31)
+    integer mcsec     ! seconds of day (0, ..., seconds/day)
+    integer jday      ! julian day of the year
+    integer fp,p      ! patch indices
+    integer c         ! column indices
+    integer g         ! gridcell indices
+    integer h         ! hemisphere indices
+    integer idpp      ! number of days past planting
+    real(r8) :: dtrad ! radiation time step delta t (seconds)
+    real(r8) dayspyr  ! days per year
+    real(r8) crmcorn  ! comparitive relative maturity for corn
+    real(r8) nfertdays_on ! number of days to fertilize
+    real(r8):: ws_flag        !winter-summer solstice flag (0 or 1)
+    real(r8):: crit_onset_gdd !critical onset growing degree-day sum
+    real(r8):: soilt
+    real(r8) :: Cd            !chill day value
+    real(r8) :: Ca            !anti-chill day value
+   
+    !------------------------------------------------------------------------
+    associate(                                                                   & 
+         ivt               =>    patch%itype                                   , & ! Input:  [integer  (:) ]  patch vegetation type 
+         dayl              =>    grc%dayl                                      , & ! Input:  [real(r8)  (:)   ]  daylength (s)
+         prev_dayl         =>    grc%prev_dayl                                 , & ! Input:  [real(r8)  (:)   ]  daylength from previous time step (s)                              
+         leaf_long         =>    pftcon%leaf_long                              , & ! Input:  leaf longevity (yrs)                              
+         leafcn            =>    pftcon%leafcn                                 , & ! Input:  leaf C:N (gC/gN)
+         frootcn           =>    pftcon%frootcn                                , & ! Input:  fine root C:N (gC/gN)
+         livewdcn          =>    pftcon%livewdcn                               , & ! Input:  live wood C:N (gC/gN)
+         deadwdcn          =>    pftcon%deadwdcn                               , & ! Input:  dead wood C:N (gC/gN)                                  
+         manunitro         =>    pftcon%manunitro                              , & ! Input:  max manure to be applied in total (kgN/m2)
+         mxmat             =>    pftcon%mxmat                                  , & ! Input:  
+         minplanttemp      =>    pftcon%minplanttemp                           , & ! Input:  
+         planttemp         =>    pftcon%planttemp                              , & ! Input:  
+         gddmin            =>    pftcon%gddmin                                 , & ! Input:  
+         hybgdd            =>    pftcon%hybgdd                                 , & ! Input:    
+         grnfill           =>    pftcon%grnfill                                , & ! Input: 
+         lfmat             =>    pftcon%lfmat                                  , & ! Input:
+         grnrp             =>    pftcon%grnrp                                  , & ! Input:
+         transplant        =>    pftcon%transplant                             , & ! Input: (O.Dombrowski)
+         woody             =>    pftcon%woody                                  , & ! Input: (O.Dombrowski)
+         season_decid      =>    pftcon%season_decid                           , & ! Input:  binary flag for seasonal-deciduous leaf habit (0 or 1)
+         baset             =>    pftcon%baset                                  , & ! Input:  crop base temperature 
+         ndays_stor        =>    pftcon%ndays_stor                             , & ! Input:  length of period for storage growth of fruit tree crops
+         crit_temp         =>    pftcon%crit_temp                              , & ! Input:  critical temperature to initiate leaf offset for fruit tree crops
+         crequ             =>    pftcon%crequ                                  , & ! Input:  chilling requirements for fruit tree crops
+
+         pftmayexist       =>    dgvs_inst%pftmayexist_patch                   , & ! Output: [logical  (:) ]  exlude seasonal decid patches from tropics
+
+         t_soisno          =>    temperature_inst%t_soisno_col                 , & ! Input:  [real(r8)  (:,:) ]  soil temperature (Kelvin)  (-nlevsno+1:nlevgrnd)
+
+         t_ref2m_min       =>    temperature_inst%t_ref2m_min_patch            , & ! Input:  [real(r8) (:) ]  daily minimum of average 2 m height surface air temperature (K)
+         t_ref2m_max       =>    temperature_inst%t_ref2m_max_patch            , & ! Input:  [real(r8) (:) ]  daily maximum of average 2 m height surface air temperature (K)
+         t_ref24           =>    temperature_inst%t_ref24_patch                , & ! Input:  [real(r8) (:) ]  24-hour averae 2 m air temperature (K)
+         t24               =>    temperature_inst%t_a24_patch                  , & ! Input:  [real(r8) (:) ]  24-hour running mean of the 2 m temperature (K)
+         t10               =>    temperature_inst%t_a10_patch                  , & ! Input:  [real(r8) (:) ]  10-day running mean of the 2 m temperature (K)    
+         a5tmin            =>    temperature_inst%t_a5min_patch                , & ! Input:  [real(r8) (:) ]  5-day running mean of min 2-m temperature         
+         a10tmin           =>    temperature_inst%t_a10min_patch               , & ! Input:  [real(r8) (:) ]  10-day running mean of min 2-m temperature        
+         gdd020            =>    temperature_inst%gdd020_patch                 , & ! Input:  [real(r8) (:) ]  20 yr mean of gdd0                                
+         gdd820            =>    temperature_inst%gdd820_patch                 , & ! Input:  [real(r8) (:) ]  20 yr mean of gdd8                                
+         gdd1020           =>    temperature_inst%gdd1020_patch                , & ! Input:  [real(r8) (:) ]  20 yr mean of gdd10                               
+
+         fertnitro         =>    crop_inst%fertnitro_patch                     , & ! Input:  [real(r8) (:) ]  fertilizer nitrogen
+         hui               =>    crop_inst%gddplant_patch                      , & ! Input:  [real(r8) (:) ]  gdd since planting (gddplant)                    
+         leafout           =>    crop_inst%gddtsoi_patch                       , & ! Input:  [real(r8) (:) ]  gdd from top soil layer temperature              
+         harvdate          =>    crop_inst%harvdate_patch                      , & ! Output: [integer  (:) ]  harvest date                                       
+         croplive          =>    crop_inst%croplive_patch                      , & ! Output: [logical  (:) ]  Flag, true if planted, not harvested               
+         cropplant         =>    crop_inst%cropplant_patch                     , & ! Output: [logical  (:) ]  Flag, true if crop may be planted                  
+         vf                =>    crop_inst%vf_patch                            , & ! Output: [real(r8) (:) ]  vernalization factor                              
+         yrop              =>    crop_inst%yrop_patch                          , & ! Output: [integer  (:) ]  year of planting (Y.Fan)
+         peaklai           =>    cnveg_state_inst%peaklai_patch                  , & ! Output: [integer  (:) ] 1: max allowed lai; 0: not at max                  
+         tlai              =>    canopystate_inst%tlai_patch                   , & ! Input:  [real(r8) (:) ]  one-sided leaf area index, no burying by snow     
+         
+         idop              =>    cnveg_state_inst%idop_patch                   , & ! Output: [integer  (:) ]  date of planting                                   
+         gddmaturity       =>    cnveg_state_inst%gddmaturity_patch            , & ! Output: [real(r8) (:) ]  gdd needed to harvest                             
+         huileaf           =>    cnveg_state_inst%huileaf_patch                , & ! Output: [real(r8) (:) ]  heat unit index at leaf emergence
+         huigrain          =>    cnveg_state_inst%huigrain_patch               , & ! Output: [real(r8) (:) ]  heat unit index needed to reach start of fruit fill                 
+         huilfmat          =>    cnveg_state_inst%huilfmat_patch               , & ! Output: [real(r8) (:) ]  heat unit index needed to reach canopy maturity (O.Dombrowski)
+         huiripe           =>    cnveg_state_inst%huiripe_patch                , & ! Output: [real(r8) (:) ]  heat unit index needed to reach start of fruit cell expansion (O.Dombrowski)                 
+         bglfr             =>    cnveg_state_inst%bglfr_patch                  , & ! Output: [real(r8) (:) ]  background litterfall rate (1/s)                  
+         bgtr              =>    cnveg_state_inst%bgtr_patch                   , & ! Output: [real(r8) (:) ]  background transfer growth rate (1/s)             
+         lgsf              =>    cnveg_state_inst%lgsf_patch                   , & ! Output: [real(r8) (:) ]  long growing season factor [0-1]
+         annavg_t2m        =>    cnveg_state_inst%annavg_t2m_patch             , & ! Input:  [real(r8)  (:)   ]  annual average 2m air temperature (K)             
+         dormant_flag      =>    cnveg_state_inst%dormant_flag_patch           , & ! Output: [real(r8)  (:)   ]  dormancy flag                                     
+         days_active       =>    cnveg_state_inst%days_active_patch            , & ! Output: [real(r8)  (:)   ]  number of days since last dormancy                  
+         onset_flag        =>    cnveg_state_inst%onset_flag_patch             , & ! Output: [real(r8) (:) ]  onset flag                                        
+         offset_flag       =>    cnveg_state_inst%offset_flag_patch            , & ! Output: [real(r8) (:) ]  offset flag                                       
+         offset2_flag      =>    cnveg_state_inst%offset2_flag_patch           , & ! Output: [real(r8) (:) ]  orchard rotation flag
+         onset_counter     =>    cnveg_state_inst%onset_counter_patch          , & ! Output: [real(r8) (:) ]  onset counter                                     
+         offset_counter    =>    cnveg_state_inst%offset_counter_patch         , & ! Output: [real(r8) (:) ]  offset counter                                    
+         perennial         =>    pftcon%perennial                              , & ! Input:  binary flag for perennial crop phenology (1=perennial, 0=not perennial) (added by Y.Fan)
+         gddmaturity2      =>    cnveg_state_inst%gddmaturity2_patch           , & ! Input:  [real(r8) (:)   ]  gdd needed to harvest since previous harvest (Y.Fan)
+         huigrain2         =>    cnveg_state_inst%huigrain2_patch              , & ! Input:  [real(r8) (:)   ]  gdd needed from last harvest to start of next grainfill (Y.Fan)
+         harvest_flag      =>    cnveg_state_inst%harvest_flag_patch           , & ! Output: [real(r8) (:)    ]  harvest flag (added by Y.Fan)       
+         prune_flag        =>    cnveg_state_inst%prune_flag_patch             , & ! Output: [real(r8) (:)    ]  pruning flag for perennials (added by Y.Fan)
+         storage_flag      =>    cnveg_state_inst%storage_flag_patch           , & ! Output: [real(r8) (:)    ]  flag to switch to storage growth for perennials
+         onset_gddflag     =>    cnveg_state_inst%onset_gddflag_patch          , & ! Output: [real(r8)  (:)   ]  onset freeze flag                                 
+         onset_gdd         =>    cnveg_state_inst%onset_gdd_patch              , & ! Output: [real(r8)  (:)   ]  onset growing degree days 
+         chill_day         =>    cnveg_state_inst%chill_day_patch              , & ! Output: [real(r8)  (:)   ] chilling days required for bud burst of fruit tree crops 
+         anti_chill_day    =>    cnveg_state_inst%anti_chill_day_patch         , & ! Output: [real(r8)  (:)   ] anti-chill days required for bud burst of fruit tree crops
+         chill_flag        =>    cnveg_state_inst%chill_flag_patch             , & ! Output: [real(r8)  (:)   ] chill flag
+
+         deadstemc                           =>    cnveg_carbonstate_inst%deadstemc_patch                      , & ! Input:  [real(r8)  (:)   ]  (gC/m2) deadstem C
+         leafc_storage                       =>    cnveg_carbonstate_inst%leafc_storage_patch                  , & ! Input:  [real(r8)  (:)   ]  (gC/m2) leaf C storage                            
+         frootc_storage                      =>    cnveg_carbonstate_inst%frootc_storage_patch                 , & ! Input:  [real(r8)  (:)   ]  (gC/m2) fine root C storage                       
+         livestemc_storage                   =>    cnveg_carbonstate_inst%livestemc_storage_patch              , & ! Input:  [real(r8)  (:)   ]  (gC/m2) live stem C storage                       
+         deadstemc_storage                   =>    cnveg_carbonstate_inst%deadstemc_storage_patch              , & ! Input:  [real(r8)  (:)   ]  (gC/m2) dead stem C storage                       
+         livecrootc_storage                  =>    cnveg_carbonstate_inst%livecrootc_storage_patch             , & ! Input:  [real(r8)  (:)   ]  (gC/m2) live coarse root C storage                
+         deadcrootc_storage                  =>    cnveg_carbonstate_inst%deadcrootc_storage_patch             , & ! Input:  [real(r8)  (:)   ]  (gC/m2) dead coarse root C storage                
+         gresp_storage                       =>    cnveg_carbonstate_inst%gresp_storage_patch                  , & ! Input:  [real(r8)  (:)   ]  (gC/m2) growth respiration storage                
+         leafc_xfer                          =>    cnveg_carbonstate_inst%leafc_xfer_patch                     , & ! Output:  [real(r8) (:)   ]  (gC/m2) leaf C transfer                           
+         frootc_xfer                         =>    cnveg_carbonstate_inst%frootc_xfer_patch                    , & ! Output:  [real(r8) (:)   ]  (gC/m2) fine root C transfer                      
+         livestemc_xfer                      =>    cnveg_carbonstate_inst%livestemc_xfer_patch                 , & ! Output:  [real(r8) (:)   ]  (gC/m2) live stem C transfer                      
+         deadstemc_xfer                      =>    cnveg_carbonstate_inst%deadstemc_xfer_patch                 , & ! Output:  [real(r8) (:)   ]  (gC/m2) dead stem C transfer                      
+         livecrootc_xfer                     =>    cnveg_carbonstate_inst%livecrootc_xfer_patch                , & ! Output:  [real(r8) (:)   ]  (gC/m2) live coarse root C transfer               
+         deadcrootc_xfer                     =>    cnveg_carbonstate_inst%deadcrootc_xfer_patch                , & ! Output:  [real(r8) (:)   ]  (gC/m2) dead coarse root C transfer               
+         deadstemc_soy                       =>    cnveg_carbonstate_inst%deadstemc_soy_patch                  , & ! Output:  [real(r8) (:)   ]  (gC/m2) dead stem C at start of year
+         deadstemc_storage_soy               =>    cnveg_carbonstate_inst%deadstemc_storage_soy_patch          , & ! Output:  [real(r8) (:)   ]  (gC/m2) dead stem C storage at start of year
+                           
+
+         deadstemn                           =>    cnveg_nitrogenstate_inst%deadstemn_patch                    , & ! Input:  [real(r8)  (:)   ]  (gN/m2) deadstem N 
+         leafn_storage                       =>    cnveg_nitrogenstate_inst%leafn_storage_patch                , & ! Input:  [real(r8)  (:)   ]  (gN/m2) leaf N storage                            
+         frootn_storage                      =>    cnveg_nitrogenstate_inst%frootn_storage_patch               , & ! Input:  [real(r8)  (:)   ]  (gN/m2) fine root N storage                       
+         livestemn_storage                   =>    cnveg_nitrogenstate_inst%livestemn_storage_patch            , & ! Input:  [real(r8)  (:)   ]  (gN/m2) live stem N storage                       
+         deadstemn_storage                   =>    cnveg_nitrogenstate_inst%deadstemn_storage_patch            , & ! Input:  [real(r8)  (:)   ]  (gN/m2) dead stem N storage                       
+         livecrootn_storage                  =>    cnveg_nitrogenstate_inst%livecrootn_storage_patch           , & ! Input:  [real(r8)  (:)   ]  (gN/m2) live coarse root N storage                
+         deadcrootn_storage                  =>    cnveg_nitrogenstate_inst%deadcrootn_storage_patch           , & ! Input:  [real(r8)  (:)   ]  (gN/m2) dead coarse root N storage                
+         leafn_xfer                          =>    cnveg_nitrogenstate_inst%leafn_xfer_patch                   , & ! Output:  [real(r8) (:)   ]  (gN/m2) leaf N transfer                           
+         frootn_xfer                         =>    cnveg_nitrogenstate_inst%frootn_xfer_patch                  , & ! Output:  [real(r8) (:)   ]  (gN/m2) fine root N transfer                      
+         livestemn_xfer                      =>    cnveg_nitrogenstate_inst%livestemn_xfer_patch               , & ! Output:  [real(r8) (:)   ]  (gN/m2) live stem N transfer                      
+         deadstemn_xfer                      =>    cnveg_nitrogenstate_inst%deadstemn_xfer_patch               , & ! Output:  [real(r8) (:)   ]  (gN/m2) dead stem N transfer                      
+         livecrootn_xfer                     =>    cnveg_nitrogenstate_inst%livecrootn_xfer_patch              , & ! Output:  [real(r8) (:)   ]  (gN/m2) live coarse root N transfer               
+         deadcrootn_xfer                     =>    cnveg_nitrogenstate_inst%deadcrootn_xfer_patch              , & ! Output:  [real(r8) (:)   ]  (gN/m2) dead coarse root N transfer               
+         deadstemn_soy                       =>    cnveg_nitrogenstate_inst%deadstemn_soy_patch                  , & ! Output:  [real(r8) (:)   ]  (gN/m2) dead stem N at start of year
+         deadstemn_storage_soy               =>    cnveg_nitrogenstate_inst%deadstemn_storage_soy_patch          , & ! Output:  [real(r8) (:)   ]  (gN/m2) dead stem N storage at start of year
+
+
+         prev_leafc_to_litter                =>    cnveg_carbonflux_inst%prev_leafc_to_litter_patch            , & ! Output: [real(r8)  (:)   ]  previous timestep leaf C litterfall flux (gC/m2/s)
+         prev_frootc_to_litter               =>    cnveg_carbonflux_inst%prev_frootc_to_litter_patch           , & ! Output: [real(r8)  (:)   ]  previous timestep froot C litterfall flux (gC/m2/s)
+         
+         leafc_xfer_to_leafc                 =>    cnveg_carbonflux_inst%leafc_xfer_to_leafc_patch             , & ! Output:  [real(r8) (:)   ]                                                    
+         frootc_xfer_to_frootc               =>    cnveg_carbonflux_inst%frootc_xfer_to_frootc_patch           , & ! Output:  [real(r8) (:)   ]                                                    
+         livestemc_xfer_to_livestemc         =>    cnveg_carbonflux_inst%livestemc_xfer_to_livestemc_patch     , & ! Output:  [real(r8) (:)   ]                                                    
+         deadstemc_xfer_to_deadstemc         =>    cnveg_carbonflux_inst%deadstemc_xfer_to_deadstemc_patch     , & ! Output:  [real(r8) (:)   ]                                                    
+         livecrootc_xfer_to_livecrootc       =>    cnveg_carbonflux_inst%livecrootc_xfer_to_livecrootc_patch   , & ! Output:  [real(r8) (:)   ]                                                    
+         deadcrootc_xfer_to_deadcrootc       =>    cnveg_carbonflux_inst%deadcrootc_xfer_to_deadcrootc_patch   , & ! Output:  [real(r8) (:)   ]                                                    
+         leafc_storage_to_xfer               =>    cnveg_carbonflux_inst%leafc_storage_to_xfer_patch           , & ! Output:  [real(r8) (:)   ]                                                    
+         frootc_storage_to_xfer              =>    cnveg_carbonflux_inst%frootc_storage_to_xfer_patch          , & ! Output:  [real(r8) (:)   ]                                                    
+         livestemc_storage_to_xfer           =>    cnveg_carbonflux_inst%livestemc_storage_to_xfer_patch       , & ! Output:  [real(r8) (:)   ]                                                    
+         deadstemc_storage_to_xfer           =>    cnveg_carbonflux_inst%deadstemc_storage_to_xfer_patch       , & ! Output:  [real(r8) (:)   ]                                                    
+         livecrootc_storage_to_xfer          =>    cnveg_carbonflux_inst%livecrootc_storage_to_xfer_patch      , & ! Output:  [real(r8) (:)   ]                                                    
+         deadcrootc_storage_to_xfer          =>    cnveg_carbonflux_inst%deadcrootc_storage_to_xfer_patch      , & ! Output:  [real(r8) (:)   ]                                                    
+         gresp_storage_to_xfer               =>    cnveg_carbonflux_inst%gresp_storage_to_xfer_patch           , & ! Output:  [real(r8) (:)   ]                                                    
+         
+         leafn_xfer_to_leafn                 =>    cnveg_nitrogenflux_inst%leafn_xfer_to_leafn_patch           , & ! Output:  [real(r8) (:)   ]                                                    
+         frootn_xfer_to_frootn               =>    cnveg_nitrogenflux_inst%frootn_xfer_to_frootn_patch         , & ! Output:  [real(r8) (:)   ]                                                    
+         livestemn_xfer_to_livestemn         =>    cnveg_nitrogenflux_inst%livestemn_xfer_to_livestemn_patch   , & ! Output:  [real(r8) (:)   ]                                                    
+         deadstemn_xfer_to_deadstemn         =>    cnveg_nitrogenflux_inst%deadstemn_xfer_to_deadstemn_patch   , & ! Output:  [real(r8) (:)   ]                                                    
+         livecrootn_xfer_to_livecrootn       =>    cnveg_nitrogenflux_inst%livecrootn_xfer_to_livecrootn_patch , & ! Output:  [real(r8) (:)   ]                                                    
+         deadcrootn_xfer_to_deadcrootn       =>    cnveg_nitrogenflux_inst%deadcrootn_xfer_to_deadcrootn_patch , & ! Output:  [real(r8) (:)   ]                                                    
+         leafn_storage_to_xfer               =>    cnveg_nitrogenflux_inst%leafn_storage_to_xfer_patch         , & ! Output:  [real(r8) (:)   ]                                                    
+         frootn_storage_to_xfer              =>    cnveg_nitrogenflux_inst%frootn_storage_to_xfer_patch        , & ! Output:  [real(r8) (:)   ]                                                    
+         livestemn_storage_to_xfer           =>    cnveg_nitrogenflux_inst%livestemn_storage_to_xfer_patch     , & ! Output:  [real(r8) (:)   ]                                                    
+         deadstemn_storage_to_xfer           =>    cnveg_nitrogenflux_inst%deadstemn_storage_to_xfer_patch     , & ! Output:  [real(r8) (:)   ]                                                    
+         livecrootn_storage_to_xfer          =>    cnveg_nitrogenflux_inst%livecrootn_storage_to_xfer_patch    , & ! Output:  [real(r8) (:)   ]                                                    
+         deadcrootn_storage_to_xfer          =>    cnveg_nitrogenflux_inst%deadcrootn_storage_to_xfer_patch    , & ! Output:  [real(r8) (:)   ]                                                    
+
+         grainc            =>    cnveg_carbonstate_inst%grainc_patch           , & ! Input:  [real(r8) (:) ]  (gC/m2) grain C (needed for perennial phenology O.Dombrowski)
+         
+         crop_seedc_to_leaf  =>   cnveg_carbonflux_inst%crop_seedc_to_leaf_patch, & ! Output: [real(r8) (:) ]  (gC/m2/s) seed source to leaf
+         crop_seedc_to_froot =>  cnveg_carbonflux_inst%crop_seedc_to_froot_patch, & ! Output: [real(r8) (:) ] (gC/m2/s) seed source to fine root
+         crop_seedc_to_deadstem  =>   cnveg_carbonflux_inst%crop_seedc_to_deadstem_patch, & ! Output: [real(r8) (:) ]  (gC/m2/s) seed source to deadstem                                             
+         crop_seedn_to_leaf  =>  cnveg_nitrogenflux_inst%crop_seedn_to_leaf_patch, & ! Output: [real(r8) (:) ]  (gN/m2/s) seed source to leaf
+         crop_seedn_to_froot =>  cnveg_nitrogenflux_inst%crop_seedn_to_froot_patch, & ! Output: [real(r8) (:) ] (gN/m2/s) seed source to fine root
+         crop_seedn_to_deadstem => cnveg_nitrogenflux_inst%crop_seedn_to_deadstem_patch, & ! Output: [real(r8) (:) ]  (gN/m2/s) seed source to deadstem
+         cphase            =>    crop_inst%cphase_patch                        , & ! Output: [real(r8) (:)]   phenology phase
+         fert_counter      =>    cnveg_nitrogenflux_inst%fert_counter_patch    , & ! Output: [real(r8) (:) ]  >0 fertilize; <=0 not (seconds)
+         fert              =>    cnveg_nitrogenflux_inst%fert_patch              & ! Output: [real(r8) (:) ]  (gN/m2/s) fertilizer applied each timestep 
+         )
+
+      ! get time info
+      dayspyr = get_curr_days_per_year()
+      jday    = get_curr_calday()
+      call get_curr_date(kyr, kmo, kda, mcsec)
+      dtrad   = real( get_rad_step_size(), r8 )
+
+      if (use_fertilizer) then
+       nfertdays_on = 20._r8 ! number of days to fertilize
+      else
+       nfertdays_on = 0._r8 ! number of days to fertilize
+      end if
+
+      do fp = 1, num_pcropp
+         p = filter_pcropp(fp)
+         c = patch%column(p)
+         g = patch%gridcell(p)
+         h = inhemi(p)
+         
+         if (perennial(ivt(p)) == 1._r8) then ! flags for perennial crop phenology (O.Dombrowski)
+                 ! background litterfall and transfer rates; long growing season factor
+                 bglfr(p) = 0._r8 
+                 bgtr(p)  = 0._r8
+                 lgsf(p)  = 0._r8
+                
+                 if (kmo == 1 .and. kda == 1 .and. mcsec == 0) then
+                    ! get deadstem C and N at the start of the year
+                    deadstemc_soy(p) = deadstemc(p)
+                    deadstemc_storage_soy(p) = deadstemc_storage(p)
+                    deadstemn_soy(p) = deadstemn(p)
+                    deadstemn_storage_soy(p) = deadstemn_storage(p)
+                    write(iulog,*) 'deadstem C and N in display and storage are:',deadstemc_soy(p),deadstemn_soy(p),deadstemc_storage_soy(p),deadstemn_storage_soy(p)
+                 end if
+
+                 if (season_decid(ivt(p)) == 1._r8) then
+                    ! onset gdd adapted by O.Dombrowski
+                    crit_onset_gdd = exp(2.5_r8 + 0.1_r8*(annavg_t2m(p) - SHR_CONST_TKFRZ))
+                    
+                    ! set flag for solstice period (winter->summer = 1, summer->winter =0)
+                    if (dayl(g) >= prev_dayl(g)) then
+                       ws_flag = 1._r8
+                    else
+                       ws_flag = 0._r8
+                    end if
+
+                    ! base temperature, or critical temperature for chill accumulation
+                    tbase = 4._r8 !baset(ivt(p))
+
+                    ! set flag for start/end of chill period (chill_flag=1),
+                    ! no chill period (chill_flag=0)
+                    if (kmo == 11 .and. kda == 1) then
+                       chill_flag(p) = 1._r8
+                    end if
+                    if (kmo == 5 .and. kda == 1 .and. chill_flag(p) == 1._r8) then
+                       chill_flag(p) = 0._r8
+                    end if
+                    
+                 end if
+               
+                 ! Phase 1: Planting to leaf emergence
+
+                 if ( (.not. croplive(p)) .and. (.not. cropplant(p)) ) then
+
+                       if ((t10(p) /= spval.and. a10tmin(p) /= spval   .and. &
+                            t10(p)     > planttemp(ivt(p))             .and. &
+                            a10tmin(p) > minplanttemp(ivt(p))          .and. &
+                            jday       >= minplantjday(ivt(p),h)       .and. &
+                            jday       <= maxplantjday(ivt(p),h)       .and. &
+                            t10(p) /= spval .and. a10tmin(p) /= spval  .and. &
+                            gdd820(p) /= spval                         .and. &
+                            gdd820(p) >= gddmin(ivt(p)))               .or.  &
+                            (jday == maxplantjday(ivt(p),h)            .and. &
+                            gdd820(p) > 0._r8                          .and. &
+                            gdd820(p) /= spval )) then
+
+                          ! impose limit on growing season length needed
+                          ! for crop maturity - for cold weather constraints
+                          croplive(p)  = .true.
+                          cropplant(p) = .true.
+                          idop(p)      = jday
+                          yrop(p)      = kyr !(Y.Fan)
+                          harvdate(p)  = NOT_Harvested
+                          
+                          ! Fruit trees are usually transplanted from nursery
+                          ! as small trees, similar to the initiation for
+                          ! deciduous trees, initial gC m-2 is assigned to
+                          ! leaf, fine root and deadstem
+                          if (transplant(ivt(p)) > 0._r8) then
+                             leafc_xfer(p)  = transplant(ivt(p))
+                          else
+                             leafc_xfer(p)  = 1._r8
+                          end if
+
+                          frootc_xfer(p) = leafc_xfer(p) ! assign same amount of leafc to fine roots
+                          leafn_xfer(p) = leafc_xfer(p) / leafcn(ivt(p)) ! with onset
+                          frootn_xfer(p) = frootc_xfer(p) / frootcn(ivt(p)) 
+                          crop_seedc_to_leaf(c) = crop_seedc_to_leaf(c) + leafc_xfer(p)/dt
+                          crop_seedc_to_froot(c) = crop_seedc_to_froot(c) + frootc_xfer(p)/dt
+                          crop_seedn_to_leaf(c) = crop_seedn_to_leaf(c) + leafn_xfer(p)/dt
+                          crop_seedn_to_froot(c) = crop_seedn_to_froot(c) + frootn_xfer(p)/dt
+                          !for woody crops like fruit trees, assign 10% of initial C to deadstem
+                          if (woody(ivt(p)) == 1._r8) then
+                             deadstemc_xfer(p) = 0.1_r8*leafc_xfer(p)
+                             deadstemn_xfer(p) = deadstemc_xfer(p)/deadwdcn(ivt(p))
+                             crop_seedc_to_deadstem(c) = crop_seedc_to_deadstem(c) + deadstemc_xfer(p)/dt
+                             crop_seedn_to_deadstem(c) = crop_seedn_to_deadstem(c) + deadstemn_xfer(p)/dt
+                          end if   
+                      
+                       end if
+
+
+                       onset_counter(p)  = 0.0_r8 ! CN terminology to trigger certain
+                       offset_counter(p) = 0.0_r8 ! carbon and nitrogen transfers
+                       onset_flag(p) = 0._r8
+                       offset_flag(p) = 0._r8
+                       offset2_flag(p) = 0._r8
+                       dormant_flag(p) = 1._r8
+                       
+                       ! at planting of orchard, assume that chilling
+                       ! requirements were already met in previous year and only
+                       ! anti chill days need to be reached.
+                       chill_day(p) = crequ(ivt(p))
+                       anti_chill_day(p) = 0._r8
+                       chill_flag(p) = 1._r8
+                       onset_gddflag(p) = 1._r8
+                       
+                       harvest_flag(p) = 0._r8 ! annual harvest flag for perennial crops (Y.Fan)           
+                 end if ! crop not live nor planted
+
+                 ! ----------------------------------
+                 ! from AgroIBIS subroutine phenocrop
+                 ! ----------------------------------
+                
+                 
+                 if (croplive(p)) then
+                    cphase(p) = 1._r8
+                    ! days past planting determine orchard rotation once maximum
+                    ! lifetime is reached
+                    idpp = int(dayspyr)*(kyr-yrop(p)) + jday - idop(p)
+                    if (season_decid(ivt(p)) == 1._r8) then
+
+                       ! Test to turn on chill day accumulation.
+                       ! If off, switch on chill day accumulation on
+                       ! October 1st
+                       if (onset_gddflag(p) == 0._r8 .and. chill_flag(p) == 1._r8) then
+                              onset_gddflag(p) = 1._r8
+                              chill_day(p) = 0._r8
+                              anti_chill_day(p) = 0._r8
+                       end if
+
+                       ! Test to turn off chill day accumulation, if on.
+                       ! This test resets the chill day accumulation if it gets past
+                       ! May 1st without reaching the chill requirements.
+                       ! In that case, it will take until the next autumn (October 1st)
+                       ! before the chill day accumulation starts again.
+ 
+                       if (onset_gddflag(p) == 1._r8 .and. chill_flag(p) ==0._r8) then
+                          onset_gddflag(p) = 0._r8
+                          chill_day(p) = 0._r8
+                          anti_chill_day(p) = 0._r8
+                       end if
+
+
+                       ! if the gdd flag is set, and if the chill day
+                       ! accumulation has not reached
+                       ! chill requirements (crequ), accumulate chill days
+                       ! for all equations temperatures must be in
+                       ! degrees (C)
+                       if (onset_gddflag(p) == 1._r8 .and. chill_day(p) > crequ(ivt(p))) then
+                           if (t_ref2m_min(p) < 1.e30_r8) then
+                              if (0._r8 <= tbase .and. tbase <= (t_ref2m_min(p)-tfrz) .and. t_ref2m_min(p)<= t_ref2m_max(p)) then
+                                 Cd = 0._r8
+                              else if (0._r8 <= (t_ref2m_min(p)-tfrz) .and. (t_ref2m_min(p)-tfrz)<= tbase .and. tbase < (t_ref2m_max(p)-tfrz)) then
+                                 Cd = -((t_ref24(p)-t_ref2m_min(p))-((t_ref2m_max(p)-tfrz)-tbase)**2/(2*(t_ref2m_max(p)-t_ref2m_min(p))))
+                              else if (0._r8 <= (t_ref2m_min(p)-tfrz) .and. t_ref2m_min(p) <= t_ref2m_max(p) .and. (t_ref2m_max(p)-tfrz) <= tbase) then
+                                 Cd = -(t_ref24(p)-t_ref2m_min(p))
+                              else if ((t_ref2m_min(p)-tfrz) < 0._r8 .and. 0._r8 <= (t_ref2m_max(p)-tfrz) .and. (t_ref2m_max(p)-tfrz) <= tbase) then
+                                 Cd = -((t_ref2m_max(p)-tfrz)**2/(2*(t_ref2m_max(p)-t_ref2m_min(p))))
+                              else if ((t_ref2m_min(p)-tfrz) < 0._r8 .and. 0._r8 < tbase .and. tbase < (t_ref2m_max(p)-tfrz)) then
+                                 Cd = -(t_ref2m_max(p)-tfrz)**2/(2*(t_ref2m_max(p)-t_ref2m_min(p))) - ((t_ref2m_max(p)-tfrz)-tbase)**2/(2*(t_ref2m_max(p)-t_ref2m_min(p)))
+                              else
+                                 Cd = 0._r8
+                              end if
+                              chill_day(p) = chill_day(p)+Cd
+                           end if
+                       end if
+
+                       ! if chill day accumulation has reached chill
+                       ! requirements (crequ), accumulate anti chill days
+                       if (onset_gddflag(p) == 1._r8 .and. chill_day(p) <= crequ(ivt(p))) then
+                          if (t_ref2m_min(p) < 1.e30_r8) then
+                             if (0._r8 <= tbase .and. tbase <= (t_ref2m_min(p)-tfrz) .and. t_ref2m_min(p) <= t_ref2m_max(p)) then
+                                Ca = (t_ref24(p)-tfrz) - tbase
+                             else if (0._r8 <= (t_ref2m_min(p)-tfrz) .and. (t_ref2m_min(p)-tfrz) <= tbase .and. tbase < (t_ref2m_max(p)-tfrz)) then
+                                Ca = ((t_ref2m_max(p)-tfrz)-tbase)**2/(2*(t_ref2m_max(p)-t_ref2m_min(p)))
+                             else if (0._r8 <= (t_ref2m_min(p)-tfrz) .and. t_ref2m_min(p) <= t_ref2m_max(p) .and. (t_ref2m_max(p)-tfrz) <= tbase) then
+                                Ca = 0._r8
+                             else if ((t_ref2m_min(p)-tfrz) < 0._r8 .and. 0._r8 <= (t_ref2m_max(p)-tfrz) .and. (t_ref2m_max(p)-tfrz) <= tbase) then
+                                Ca = 0._r8
+                             else if ((t_ref2m_min(p)-tfrz) < 0._r8 .and. 0._r8 < tbase .and. tbase < (t_ref2m_max(p)-tfrz)) then
+                                Ca = ((t_ref2m_max(p)-tfrz)-tbase)**2/(2*(t_ref2m_max(p)-t_ref2m_min(p)))
+                             else
+                                Ca = 0._r8
+                             end if
+                             anti_chill_day(p) = anti_chill_day(p)+Ca
+                          end if
+                       end if
+                      
+                       ! update offset_counter and test for the end of the offset period
+                       if (offset_flag(p) == 1.0_r8) then
+                          ! decrement counter for offset period
+                          offset_counter(p) = offset_counter(p) - dt
+                          prune_flag(p) = 1._r8
+                          
+                          ! if this is the end of the offset_period, reset phenology
+                          ! flags and indices
+                          if (offset_counter(p) < dt/2._r8) then
+                             offset_flag(p) = 0._r8
+                             offset_counter(p) = 0._r8
+                             dormant_flag(p) = 1._r8
+                             days_active(p) = 0._r8 
+                             harvest_flag(p) = 0._r8
+                             storage_flag(p) = 0._r8
+                             if (use_cndv) then
+                               pftmayexist(p) = .true.
+                             end if
+
+                             ! reset the previous timestep litterfall flux memory
+                             prev_leafc_to_litter(p) = 0._r8
+                             prev_frootc_to_litter(p) = 0._r8
+                          end if
+                       end if
+
+                       ! update onset_counter and test for the end of the onset period
+                       if (onset_flag(p) == 1.0_r8) then
+                          ! decrement counter for onset period
+                          onset_counter(p) = onset_counter(p) - dt
+
+                          ! if this is the end of the onset period, reset phenology
+                          ! flags and indices
+                          if (onset_counter(p) < dt/2._r8) then
+                             onset_flag(p) = 0.0_r8
+                             onset_counter(p) = 0.0_r8
+                             ! set all transfer growth rates to 0.0
+                             leafc_xfer_to_leafc(p)   = 0.0_r8
+                             frootc_xfer_to_frootc(p) = 0.0_r8
+                             leafn_xfer_to_leafn(p)   = 0.0_r8
+                             frootn_xfer_to_frootn(p) = 0.0_r8
+                             if (woody(ivt(p)) == 1.0_r8) then
+                                livestemc_xfer_to_livestemc(p)   = 0.0_r8
+                                deadstemc_xfer_to_deadstemc(p)   = 0.0_r8
+                                livecrootc_xfer_to_livecrootc(p) = 0.0_r8
+                                deadcrootc_xfer_to_deadcrootc(p) = 0.0_r8
+                                livestemn_xfer_to_livestemn(p)   = 0.0_r8
+                                deadstemn_xfer_to_deadstemn(p)   = 0.0_r8
+                                livecrootn_xfer_to_livecrootn(p) = 0.0_r8
+                                deadcrootn_xfer_to_deadcrootn(p) = 0.0_r8
+                             end if
+                             ! set transfer pools to 0.0
+                             leafc_xfer(p) = 0.0_r8
+                             leafn_xfer(p) = 0.0_r8
+                             frootc_xfer(p) = 0.0_r8
+                             frootn_xfer(p) = 0.0_r8
+                             if (woody(ivt(p)) == 1.0_r8) then
+                                livestemc_xfer(p) = 0.0_r8
+                                livestemn_xfer(p) = 0.0_r8
+                                deadstemc_xfer(p) = 0.0_r8
+                                deadstemn_xfer(p) = 0.0_r8
+                                livecrootc_xfer(p) = 0.0_r8
+                                livecrootn_xfer(p) = 0.0_r8
+                                deadcrootc_xfer(p) = 0.0_r8
+                                deadcrootn_xfer(p) = 0.0_r8
+                             end if
+                          end if
+                       end if
+
+                       ! test for switching from dormant period to growth period
+                       if (dormant_flag(p) == 1._r8) then
+                          ! Test if maximum orchard lifespan is reached and
+                          ! orchard rotation should be initialized:
+                          if (idpp >= mxmat(ivt(p))) then
+                            croplive(p) = .false.
+                            cphase(p) = 4._r8
+                            offset2_flag(p) = 1._r8
+                          end if
+
+                          prune_flag(p) = 0._r8
+
+                          ! set onset_flag if critical growing degree-day sum is exceeded
+                          if (anti_chill_day(p) > 0._r8 .and. anti_chill_day(p) >= (- chill_day(p))) then
+                             cphase(p) = 2.0_r8
+                             
+                             ! calculate gdd thresholds from bud burst (huileaf)
+                             huileaf(p) = hui(p)
+                             huigrain(p) = huileaf(p) + grnfill(ivt(p))
+                             huiripe(p) = huileaf(p) + grnrp(ivt(p))
+                             huilfmat(p) = huileaf(p) + lfmat(ivt(p))
+                             gddmaturity(p)= huileaf(p) + hybgdd(ivt(p))
+                            
+                             ! set parameters for bud burst calculation
+                             chill_day(p) = 0._r8
+                             anti_chill_day(p) = 0._r8
+                             chill_flag(p) = 0._r8
+                             
+                             onset_flag(p) = 1.0_r8
+                             dormant_flag(p) = 0.0_r8
+                             onset_gddflag(p) = 0.0_r8
+                             onset_gdd(p) = 0.0_r8
+                             onset_counter(p) = ndays_stor(ivt(p)) * secspday 
+                          
+                             fert_counter(p)  = nfertdays_on * secspday
+                             if (nfertdays_on .gt. 0) then
+                                fert(p) = (manunitro(ivt(p)) * 1000._r8 + fertnitro(p))/ fert_counter(p)
+                             else
+                                fert(p) = 0._r8
+                             end if
+                            
+                             ! move all the storage pools into transfer pools,
+                             ! where they will be transfered to displayed growth over the onset period.
+                             ! set carbon fluxes for shifting storage pools to transfer pools
+                             leafc_storage_to_xfer(p)  = fstor2tran * leafc_storage(p)/dt
+                             frootc_storage_to_xfer(p) = fstor2tran * frootc_storage(p)/dt
+                             if (woody(ivt(p)) == 1.0_r8) then
+                                livestemc_storage_to_xfer(p)  = fstor2tran * livestemc_storage(p)/dt
+                                deadstemc_storage_to_xfer(p)  = fstor2tran * deadstemc_storage(p)/dt
+                                livecrootc_storage_to_xfer(p) = fstor2tran * livecrootc_storage(p)/dt
+                                deadcrootc_storage_to_xfer(p) = fstor2tran * deadcrootc_storage(p)/dt
+                                gresp_storage_to_xfer(p)      = fstor2tran * gresp_storage(p)/dt
+                             end if
+
+                             ! set nitrogen fluxes for shifting storage pools to transfer pools
+                             leafn_storage_to_xfer(p)  = fstor2tran * leafn_storage(p)/dt
+                             frootn_storage_to_xfer(p) = fstor2tran * frootn_storage(p)/dt
+                             if (woody(ivt(p)) == 1.0_r8) then
+                                livestemn_storage_to_xfer(p)  = fstor2tran * livestemn_storage(p)/dt
+                                deadstemn_storage_to_xfer(p)  = fstor2tran * deadstemn_storage(p)/dt
+                                livecrootn_storage_to_xfer(p) = fstor2tran * livecrootn_storage(p)/dt
+                                deadcrootn_storage_to_xfer(p) = fstor2tran * deadcrootn_storage(p)/dt
+                             end if
+                          end if
+
+                       ! test for switching from growth period to offset period
+                       else if (dormant_flag(p) == 0.0_r8 .and. offset_flag(p) == 0.0_r8) then
+                         if (use_cndv) then
+                            ! If days_active > 355, then remove patch in
+                            ! CNDVEstablishment at the end of the year.
+                            ! days_active > 355 is a symptom of seasonal decid. patches
+                            ! occurring in
+                            ! gridcells where dayl never drops below crit_dayl.
+                            ! This results in TLAI>1e4 in a few gridcells.
+                            days_active(p) = days_active(p) + fracday
+                            if (days_active(p) > 355._r8) pftmayexist(p) = .false.
+                         end if
+
+                         ! other crop stages occur outside the dormancy period
+                         if ((hui(p) >= gddmaturity(p) .and. idpp < mxmat(ivt(p)))  .or. &
+                             (jday >= maxharvjday(ivt(p),h) .and. idpp < mxmat(ivt(p)))) then
+                             
+                            if (tlai(p) <= 0._r8 .and. harvest_flag(p) == 0._r8) then ! plant never emerged or died
+                               croplive(p) = .false.
+                               if (harvdate(p) >= NOT_Harvested) harvdate(p) = jday
+                               write(iulog,*) 'WARNING: croplive is set to false and harvdate to jday:',harvdate(p)
+                               crop_seedc_to_leaf(c)   = crop_seedc_to_leaf(c) - leafc_xfer(p)/dt
+                               crop_seedc_to_froot(c)  = crop_seedc_to_froot(c) - frootc_xfer(p)/dt
+                               crop_seedn_to_leaf(c)   = crop_seedn_to_leaf(c) - leafn_xfer(p)/dt
+                               crop_seedn_to_froot(c)  = crop_seedn_to_froot(c) - frootn_xfer(p)/dt
+                               leafc_xfer(p)  = 0._r8  ! revert planting transfers
+                               frootc_xfer(p) = 0._r8
+                               leafn_xfer(p)  = leafc_xfer(p) / leafcn(ivt(p))
+                               frootn_xfer(p) = frootc_xfer(p) / frootcn(ivt(p))
+                               if (woody(ivt(p)) == 1._r8) then
+                                  crop_seedc_to_deadstem(c) = crop_seedc_to_deadstem(c) - deadstemc_xfer(p)/dt
+                                  crop_seedn_to_deadstem(c) = crop_seedn_to_deadstem(c) - deadstemn_xfer(p)/dt
+                                  deadstemc_xfer(p) = 0._r8
+                                  deadstemn_xfer(p) = deadstemc_xfer(p) / deadwdcn(ivt(p))
+                               end if
+                            else if (grainc(p) > 0._r8) then !only harvest when there is positive grainc accumulated during grainfill
+                               harvest_flag(p) = 1._r8
+                               storage_flag(p) = 1._r8
+                            end if
+                         else
+                            harvest_flag(p) = 0._r8
+                         end if 
+
+                         if (idpp >= mxmat(ivt(p))) then
+                            if (harvdate(p) >= NOT_Harvested) harvdate(p) = jday
+                            croplive(p) = .false.
+                            cphase(p) = 4._r8
+                            if (tlai(p) > 0._r8) then ! plant had emerged before rotation
+                               offset2_flag(p) = 1._r8
+                            else      ! plant never emerged from ground
+                               crop_seedc_to_leaf(p) = crop_seedc_to_leaf(p) - leafc_xfer(p)/dt
+                               crop_seedc_to_froot(c)  = crop_seedc_to_froot(c) - frootc_xfer(p)/dt
+                               crop_seedn_to_leaf(p) = crop_seedn_to_leaf(p) - leafn_xfer(p)/dt
+                               crop_seedn_to_froot(c)  = crop_seedn_to_froot(c) - frootn_xfer(p)/dt
+                               leafc_xfer(p) = 0._r8
+                               frootc_xfer(p) = 0._r8
+                               leafn_xfer(p) = leafc_xfer(p) / leafcn(ivt(p))
+                               frootn_xfer(p) = frootc_xfer(p) / frootcn(ivt(p))
+                               if (woody(ivt(p)) == 1._r8) then
+                                  crop_seedc_to_deadstem(c) = crop_seedc_to_deadstem(c) - deadstemc_xfer(p)/dt
+                                  crop_seedn_to_deadstem(c) = crop_seedn_to_deadstem(c) - deadstemn_xfer(p)/dt
+                                  deadstemc_xfer(p) = 0._r8
+                                  deadstemn_xfer(p) = deadstemc_xfer(p) / deadwdcn(ivt(p))
+                               end if
+                            end if 
+                         end if ! idpp >=mxmat
+
+                         if (fert_counter(p) <= 0._r8) then
+                            fert(p) = 0._r8
+                         else ! continue same fert application every timestep
+                            fert_counter(p) = fert_counter(p) - dtrad
+                         end if
+
+                         ! only begin to test for offset daylength once past the summer sol
+                         if (ws_flag == 0._r8 .and. t_ref24(p) < crit_temp(ivt(p))) then
+                             offset_flag(p) = 1._r8
+                             !storage_flag(p) = 0._r8
+                             offset_counter(p) = ndays_off * secspday
+                             prev_leafc_to_litter(p) = 0._r8
+                             prev_frootc_to_litter(p) = 0._r8
+                         end if
+                       end if ! dormant_flag == 1
+                    end if ! season_decid
+
+                 else   ! crop not live
+                    dormant_flag(p) = 1._r8
+                    onset_counter(p) = 0._r8
+                    ! the next lines conserve mass if leaf*/froot*/deadstem*_xfer > 0 due to interpinic.
+                    ! We subtract from any existing value in crop_seedc_to_* /
+                    ! crop_seedn_to_* in the unlikely event that we enter this block of
+                    ! code in the same time step where the planting transfer originally
+                    ! occurred.
+                    crop_seedc_to_leaf(p) = crop_seedc_to_leaf(p) - leafc_xfer(p)/dt
+                    crop_seedc_to_froot(c)  = crop_seedc_to_froot(c) - frootc_xfer(p)/dt
+                    crop_seedn_to_leaf(p) = crop_seedn_to_leaf(p) - leafn_xfer(p)/dt
+                    crop_seedn_to_froot(c)  = crop_seedn_to_froot(c) - frootn_xfer(p)/dt
+                    leafc_xfer(p) = 0._r8
+                    frootc_xfer(p) = 0._r8
+                    leafn_xfer(p) = leafc_xfer(p) / leafcn(ivt(p))
+                    frootn_xfer(p) = frootc_xfer(p) / frootcn(ivt(p))
+                    if (woody(ivt(p)) == 1._r8) then
+                       crop_seedc_to_deadstem(c) = crop_seedc_to_deadstem(c) - deadstemc_xfer(p)/dt
+                       crop_seedn_to_deadstem(c) = crop_seedn_to_deadstem(c) - deadstemn_xfer(p)/dt
+                       deadstemc_xfer(p) = 0._r8
+                       deadstemn_xfer(p) = deadstemc_xfer(p) / deadwdcn(ivt(p))
+                    end if
+                    if (use_c13) then
+                       c13_cnveg_carbonstate_inst%leafc_xfer_patch(p) = 0._r8
+                    endif
+                    if (use_c14) then
+                       c14_cnveg_carbonstate_inst%leafc_xfer_patch(p) = 0._r8
+                    endif
+
+                 end if ! croplive
+         end if ! end if perennial(ivt(p)) == 1._r8
+      end do ! prognostic crops loop
+
+    end associate
+
+  end subroutine FruitTreePhenology
+
+  !-----------------------------------------------------------------------
+
   subroutine CropPhenology(num_pcropp, filter_pcropp                     , &
        waterdiagnosticbulk_inst, temperature_inst, crop_inst, canopystate_inst, cnveg_state_inst , &
        cnveg_carbonstate_inst, cnveg_nitrogenstate_inst, cnveg_carbonflux_inst, cnveg_nitrogenflux_inst,&
