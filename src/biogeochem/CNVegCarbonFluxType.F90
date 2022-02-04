@@ -139,6 +139,10 @@ module CNVegCarbonFluxType
      real(r8), pointer :: livestemc_to_biofuelc_patch               (:)     ! livestem C to biofuel C (gC/m2/s)
      real(r8), pointer :: grainc_to_seed_patch                      (:)     ! grain C to seed for prognostic crop(gC/m2/s)
 
+     ! pruning litterfall flux
+     real(r8), pointer :: prunec_to_litter_patch                    (:)     ! pruning C litterfall (gC/m2/s)
+     real(r8), pointer :: prunec_storage_to_litter_patch            (:)     ! pruning storage C litterfall (gC/m2/s)
+
      ! maintenance respiration fluxes     
      real(r8), pointer :: cpool_to_resp_patch                       (:)     ! CNflex excess C maintenance respiration (gC/m2/s)
      real(r8), pointer :: cpool_to_leafc_resp_patch                 (:)     ! CNflex excess C maintenance respiration (gC/m2/s)
@@ -268,6 +272,8 @@ module CNVegCarbonFluxType
 
      ! crop fluxes
      real(r8), pointer :: crop_seedc_to_leaf_patch                  (:)     ! (gC/m2/s) seed source to leaf, for crops
+     real(r8), pointer :: crop_seedc_to_froot_patch                 (:)     ! (gC/m2/s) seed source to fine roots, for perennial crops (O.Dombrowski)
+     real(r8), pointer :: crop_seedc_to_deadstem_patch              (:)     ! (gC/m2/s) seed source to deadstem, for perennial crops (O.Dombrowski)
 
      ! summary (diagnostic) flux variables, not involved in mass balance
      real(r8), pointer :: gpp_before_downreg_patch                  (:)     ! (gC/m2/s) gross primary production before down regulation
@@ -613,6 +619,8 @@ contains
     allocate(this%leafc_loss_patch                          (begp:endp)) ; this%leafc_loss_patch                          (:) = nan
     allocate(this%woodc_alloc_patch                         (begp:endp)) ; this%woodc_alloc_patch                         (:) = nan
     allocate(this%woodc_loss_patch                          (begp:endp)) ; this%woodc_loss_patch                          (:) = nan
+    allocate(this%prunec_to_litter_patch                    (begp:endp)) ; this%prunec_to_litter_patch                    (:) = nan
+    allocate(this%prunec_storage_to_litter_patch            (begp:endp)) ; this%prunec_storage_to_litter_patch            (:) = nan
 
     ! Third dimension not i_litr_max because that parameter may obtain its
     ! value after we've been through here
@@ -644,6 +652,8 @@ contains
     allocate(this%dwt_crop_productc_gain_patch      (begp:endp))                  ; this%dwt_crop_productc_gain_patch(:) =nan
 
     allocate(this%crop_seedc_to_leaf_patch          (begp:endp))                  ; this%crop_seedc_to_leaf_patch  (:)  =nan
+    allocate(this%crop_seedc_to_froot_patch         (begp:endp))                  ; this%crop_seedc_to_froot_patch  (:)  =nan
+    allocate(this%crop_seedc_to_deadstem_patch      (begp:endp))                  ; this%crop_seedc_to_deadstem_patch (:)  =nan
 
     allocate(this%cwdc_loss_col                     (begc:endc))                  ; this%cwdc_loss_col             (:)  =nan
     allocate(this%litterc_loss_col                  (begc:endc))                  ; this%litterc_loss_col          (:)  =nan
@@ -2922,6 +2932,16 @@ contains
             avgflag='A', long_name='crop seed source to leaf', &
             ptr_patch=this%crop_seedc_to_leaf_patch, default='inactive')
 
+       this%crop_seedc_to_froot_patch(begp:endp) = spval                        !(added by O.Dombrowski)
+       call hist_addfld1d (fname='CROP_SEEDC_TO_FROOT', units='gC/m^2/s', &
+            avgflag='A', long_name='crop seed source to fine root', &
+            ptr_patch=this%crop_seedc_to_froot_patch, default='inactive')
+
+       this%crop_seedc_to_deadstem_patch(begp:endp) = spval                     !(added by O.Dombrowski)
+       call hist_addfld1d (fname='CROP_SEEDC_TO_DEADSTEM', units='gC/m^2/s', &
+            avgflag='A', long_name='crop seed source to deadstem', &
+            ptr_patch=this%crop_seedc_to_deadstem_patch, default='inactive')
+
         this%sr_col(begc:endc) = spval
         call hist_addfld1d (fname='SR', units='gC/m^2/s', &
              avgflag='A', long_name='total soil respiration (HR + root resp)', &
@@ -3100,6 +3120,16 @@ contains
             avgflag='A', long_name='C13 crop seed source to leaf', &
             ptr_patch=this%crop_seedc_to_leaf_patch, default='inactive')
 
+       this%crop_seedc_to_froot_patch(begp:endp) = spval                            !(added by O.Dombrowski)
+       call hist_addfld1d (fname='C13_CROP_SEEDC_TO_FROOT', units='gC13/m^2/s', &
+            avgflag='A', long_name='C13 crop seed source to fine root', &
+            ptr_patch=this%crop_seedc_to_froot_patch, default='inactive')
+
+       this%crop_seedc_to_deadstem_patch(begp:endp) = spval                         !(added by O.Dombrowski)
+       call hist_addfld1d (fname='C13_CROP_SEEDC_TO_DEADSTEM', units='gC13/m^2/s', &
+            avgflag='A', long_name='C13 crop seed source to deadstem', &
+            ptr_patch=this%crop_seedc_to_deadstem_patch, default='inactive')
+
         this%sr_col(begc:endc) = spval
         call hist_addfld1d (fname='C13_SR', units='gC13/m^2/s', &
              avgflag='A', long_name='C13 total soil respiration (HR + root resp)', &
@@ -3259,6 +3289,16 @@ contains
        call hist_addfld1d (fname='C14_CROP_SEEDC_TO_LEAF', units='gC14/m^2/s', &
             avgflag='A', long_name='C14 crop seed source to leaf', &
             ptr_patch=this%crop_seedc_to_leaf_patch, default='inactive')
+
+       this%crop_seedc_to_froot_patch(begp:endp) = spval                         !(added by O.Dombrowski)
+       call hist_addfld1d (fname='C14_CROP_SEEDC_TO_FROOT', units='gC14/m^2/s', &
+            avgflag='A', long_name='C14 crop seed source to fine root', &
+            ptr_patch=this%crop_seedc_to_froot_patch, default='inactive')
+
+       this%crop_seedc_to_deadstem_patch(begp:endp) = spval                      !(added by O.Dombrowski)
+       call hist_addfld1d (fname='C14_CROP_SEEDC_TO_DEADSTEM', units='gC14/m^2/s', &
+            avgflag='A', long_name='C14 crop seed source to deadstem', &
+            ptr_patch=this%crop_seedc_to_deadstem_patch, default='inactive')
 
         this%sr_col(begc:endc) = spval
         call hist_addfld1d (fname='C14_SR', units='gC14/m^2/s', &
@@ -3531,6 +3571,16 @@ contains
             dim1name='pft', &
             long_name='grain C shift storage to transfer', units='gC/m2/s', &
             interpinic_flag='interp', readvar=readvar, data=this%grainc_storage_to_xfer_patch)
+
+       call restartvar(ncid=ncid, flag=flag,  varname='prunec_to_litter', xtype=ncd_double,  &    !(added by O.Dombrowski)
+            dim1name='pft', &
+            long_name='pruning C litterfall', units='gC/m2/s', &
+            interpinic_flag='interp', readvar=readvar, data=this%prunec_to_litter_patch)
+
+       call restartvar(ncid=ncid, flag=flag,  varname='prunec_storage_to_litter', xtype=ncd_double,  &    !(added by O.Dombrowski)
+            dim1name='pft', &
+            long_name='pruning storage C litterfall', units='gC/m2/s', &
+            interpinic_flag='interp', readvar=readvar, data=this%prunec_storage_to_litter_patch)
 
     end if
 
@@ -3834,6 +3884,8 @@ contains
        this%woodc_loss_patch(i)                          = value_patch
 
        this%crop_seedc_to_leaf_patch(i)                  = value_patch
+       this%crop_seedc_to_froot_patch(i)                 = value_patch
+       this%crop_seedc_to_deadstem_patch(i)              = value_patch
        this%grainc_to_cropprodc_patch(i)                 = value_patch
     end do
 
@@ -3855,6 +3907,8 @@ contains
           this%cpool_grain_storage_gr_patch(i)  = value_patch
           this%transfer_grain_gr_patch(i)       = value_patch
           this%grainc_storage_to_xfer_patch(i)  = value_patch
+          this%prunec_to_litter_patch(i)        = value_patch
+          this%prunec_storage_to_litter_patch(i) = value_patch
        end do
     end if
 
@@ -4289,7 +4343,9 @@ contains
        if ( use_crop .and. patch%itype(p) >= npcropmin )then
           this%litfall_patch(p) =      &
                this%litfall_patch(p) + &
-               this%livestemc_to_litter_patch(p)
+               this%livestemc_to_litter_patch(p) + &
+               this%prunec_to_litter_patch(p) + &
+               this%prunec_storage_to_litter_patch(p)
 
           if (.not. use_grainproduct) then
              this%litfall_patch(p) = &
