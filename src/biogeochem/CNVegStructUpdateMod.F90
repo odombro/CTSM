@@ -96,6 +96,7 @@ contains
          ivt                =>  patch%itype                               , & ! Input:  [integer  (:) ] patch vegetation type                                
 
          woody              =>  pftcon%woody                            , & ! Input:  binary flag for woody lifeform (1=woody, 0=not woody)
+         perennial          =>  pftcon%perennial                        , & ! Input:  binary flag for perennial crop types (added by O.Dombrowski)
          slatop             =>  pftcon%slatop                           , & ! Input:  specific leaf area at top of canopy, projected area basis [m^2/gC]
          dsladlai           =>  pftcon%dsladlai                         , & ! Input:  dSLA/dLAI, projected area basis [m^2/gC]           
          z0mr               =>  pftcon%z0mr                             , & ! Input:  ratio of momentum roughness length to canopy top height (-)
@@ -124,7 +125,8 @@ contains
 
          farea_burned       =>  cnveg_state_inst%farea_burned_col       , & ! Input:  [real(r8) (:) ] F. Li and S. Levis                                 
          htmx               =>  cnveg_state_inst%htmx_patch             , & ! Output: [real(r8) (:) ] max hgt attained by a crop during yr (m)          
-         peaklai            =>  cnveg_state_inst%peaklai_patch          , & ! Output: [integer  (:) ] 1: max allowed lai; 0: not at max                  
+         peaklai            =>  cnveg_state_inst%peaklai_patch          , & ! Output: [integer  (:) ] 1: max allowed lai; 0: not at max
+         dormant_flag       =>  cnveg_state_inst%dormant_flag_patch     , & ! Output: [real(r8) (:) ] dormancy flag (added by O.Dombrowski)                  
 
          harvdate           =>  crop_inst%harvdate_patch                , & ! Input:  [integer  (:) ] harvest date                                       
 
@@ -231,6 +233,14 @@ contains
                htop(p) = max(htop(p), 0.01_r8)
 
                hbot(p) = max(0._r8, min(3._r8, htop(p)-1._r8))
+
+               if (perennial(ivt(p)) == 1._r8) then
+                  if (dormant_flag(p) == 0._r8) then
+                     if (tlai(p) >= laimx(ivt(p))) peaklai(p) = 1
+                  else if (dormant_flag(p) == 1._r8) then
+                     peaklai(p) = 0
+                  end if
+               end if
 
             else if (ivt(p) >= npcropmin) then ! prognostic crops
 
