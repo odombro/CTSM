@@ -509,6 +509,7 @@ module CNFUNMod
          ! -deciduous leaf habit (0 or 1)
          stress_decid           => pftcon%stress_decid                                  , & ! Input:   binary flag for stress
          ! -deciduous leaf habit (0 or 1)
+         perennial              => pftcon%perennial                                     , & ! Input:   binary flag for perennial crop types (0 or 1)
          a_fix                  => pftcon%a_fix                                         , & ! Input:   A BNF parameter
          b_fix                  => pftcon%b_fix                                         , & ! Input:   A BNF parameter
          c_fix                  => pftcon%c_fix                                         , & ! Input:   A BNF parameter
@@ -1191,7 +1192,7 @@ fix_loop:   do FIX =plants_are_fixing, plants_not_fixing !loop around percentage
                !           Calculate appropriate degree of retranslocation
                !-------------------------------------------------------------------------------
       
-               if(leafc(p).gt.0.0_r8.and.litterfall_n_step(p,istp)* fixerfrac>0.0_r8.and.ivt(p) <npcropmin)then
+               if(leafc(p).gt.0.0_r8.and.litterfall_n_step(p,istp)* fixerfrac>0.0_r8.and. (ivt(p) <npcropmin .or. perennial(ivt(p)) == 1.0_r8)) then
                   call fun_retranslocation(p,dt,npp_to_spend,&
                                 litterfall_c_step(p,istp)* fixerfrac,&
                                 litterfall_n_step(p,istp)* fixerfrac,&
