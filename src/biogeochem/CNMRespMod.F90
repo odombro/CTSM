@@ -176,6 +176,7 @@ contains
          ivt            =>    patch%itype                                 , & ! Input:  [integer  (:)   ]  patch vegetation type                                
 
          woody          =>    pftcon%woody                              , & ! Input:  binary flag for woody lifeform (1=woody, 0=not woody)
+         perennial      =>    pftcon%perennial                          , & ! Input:  binary flag for perennial crop types (1=perennial, 0= not perennial)
 
          frac_veg_nosno =>    canopystate_inst%frac_veg_nosno_patch     , & ! Input:  [integer  (:)   ]  fraction of vegetation not covered by snow (0 OR 1) [-]
          laisun         =>    canopystate_inst%laisun_patch             , & ! Input:  [real(r8) (:)   ]  sunlit projected leaf area index                  
@@ -264,7 +265,10 @@ contains
          if (woody(ivt(p)) == 1) then
             livestem_mr(p) = livestemn(p)*br*tc
             livecroot_mr(p) = livecrootn(p)*br_root*tc
-         else if (ivt(p) >= npcropmin) then
+            if (perennial(ivt(p)) == 1._r8) then ! added by (O.Dombrowski)
+               grain_mr(p) = grainn(p)*br*tc
+            end if
+         else if (ivt(p) >= npcropmin .and. perennial(ivt(p)) == 0._r8) then
             livestem_mr(p) = livestemn(p)*br*tc
             grain_mr(p) = grainn(p)*br*tc
          end if
