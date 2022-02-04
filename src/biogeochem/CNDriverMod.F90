@@ -377,6 +377,7 @@ contains
             c13_cnveg_carbonstate_inst, c14_cnveg_carbonstate_inst, &
             leaf_prof_patch=soilbiogeochem_state_inst%leaf_prof_patch(begp:endp,1:nlevdecomp_full), &
             froot_prof_patch=soilbiogeochem_state_inst%froot_prof_patch(begp:endp,1:nlevdecomp_full), &
+            stem_prof_patch=soilbiogeochem_state_inst%stem_prof_patch(begp:endp,1:nlevdecomp_full), &
             phase=1)
        call t_stopf('CNPhenology_phase1')
 
@@ -474,6 +475,7 @@ contains
             c13_cnveg_carbonstate_inst, c14_cnveg_carbonstate_inst, &
             leaf_prof_patch=soilbiogeochem_state_inst%leaf_prof_patch(begp:endp,1:nlevdecomp_full), &
             froot_prof_patch=soilbiogeochem_state_inst%froot_prof_patch(begp:endp,1:nlevdecomp_full), &
+            stem_prof_patch=soilbiogeochem_state_inst%stem_prof_patch(begp:endp,1:nlevdecomp_full), &
             phase=1)
     end if
     call CNPhenology (bounds, num_soilc, filter_soilc, num_soilp, &
@@ -485,6 +487,7 @@ contains
          c13_cnveg_carbonstate_inst, c14_cnveg_carbonstate_inst, &
          leaf_prof_patch=soilbiogeochem_state_inst%leaf_prof_patch(begp:endp,1:nlevdecomp_full), &
          froot_prof_patch=soilbiogeochem_state_inst%froot_prof_patch(begp:endp,1:nlevdecomp_full), &
+         stem_prof_patch=soilbiogeochem_state_inst%stem_prof_patch(begp:endp,1:nlevdecomp_full), &
          phase=2)
 
     call t_stopf('CNPhenology')
