@@ -135,6 +135,10 @@ module CNVegNitrogenFluxType
      real(r8), pointer :: frootn_to_retransn_patch                  (:)     ! patch fine root N to retranslocated N pool (gN/m2/s)
      real(r8), pointer :: frootn_to_litter_patch                    (:)     ! patch fine root N litterfall (gN/m2/s)
 
+     ! pruning fluxes
+     real(r8), pointer :: prunen_to_litter_patch                    (:)     ! patch pruning N to litter (gN/m2/s)
+     real(r8), pointer :: prunen_storage_to_litter_patch            (:)     ! patch pruning N to litter (gN/m2/s)
+
      ! allocation fluxes
      real(r8), pointer :: retransn_to_npool_patch                   (:)     ! patch deployment of retranslocated N (gN/m2/s)  
      real(r8), pointer :: free_retransn_to_npool_patch              (:)     ! patch deployment of free retranslocated N (gN/m2/s)           
@@ -198,6 +202,8 @@ module CNVegNitrogenFluxType
 
      ! crop fluxes
      real(r8), pointer :: crop_seedn_to_leaf_patch                  (:)     ! patch (gN/m2/s) seed source to leaf, for crops
+     real(r8), pointer :: crop_seedn_to_froot_patch                 (:)     ! patch (gN/m2/s) seed source to fine root, for perennial crops (added by O.Dombrowski)
+     real(r8), pointer :: crop_seedn_to_deadstem_patch              (:)     ! patch (gN/m2/s) seed source to deadstem, for perennial crops (added by O.Dombrowski)
      
      ! Misc
      real(r8), pointer :: plant_ndemand_patch                       (:)     ! N flux required to support initial GPP (gN/m2/s)
@@ -413,7 +419,8 @@ contains
     allocate(this%fert_patch                                (begp:endp)) ; this%fert_patch                                (:) = nan
     allocate(this%fert_counter_patch                        (begp:endp)) ; this%fert_counter_patch                        (:) = nan
     allocate(this%soyfixn_patch                             (begp:endp)) ; this%soyfixn_patch                             (:) = nan
-
+    allocate(this%prunen_to_litter_patch                    (begp:endp)) ; this%prunen_to_litter_patch                    (:) = nan
+    allocate(this%prunen_storage_to_litter_patch            (begp:endp)) ; this%prunen_storage_to_litter_patch            (:) = nan
     allocate(this%grainn_to_cropprodn_patch                 (begp:endp)) ; this%grainn_to_cropprodn_patch                 (:) = nan
     allocate(this%grainn_to_cropprodn_col                   (begc:endc)) ; this%grainn_to_cropprodn_col                   (:) = nan
 
@@ -437,6 +444,8 @@ contains
     allocate(this%dwt_deadcrootn_to_cwdn_col   (begc:endc,1:nlevdecomp_full)) ; this%dwt_deadcrootn_to_cwdn_col   (:,:) = nan
 
     allocate(this%crop_seedn_to_leaf_patch     (begp:endp))                   ; this%crop_seedn_to_leaf_patch     (:)   = nan
+    allocate(this%crop_seedn_to_froot_patch    (begp:endp))                   ; this%crop_seedn_to_froot_patch    (:)   = nan 
+    allocate(this%crop_seedn_to_deadstem_patch (begp:endp))                   ; this%crop_seedn_to_deadstem_patch (:)   = nan 
 
     allocate(this%m_decomp_npools_to_fire_vr_col    (begc:endc,1:nlevdecomp_full,1:ndecomp_pools))
     allocate(this%m_decomp_npools_to_fire_col       (begc:endc,1:ndecomp_pools                  ))
@@ -1041,6 +1050,16 @@ contains
          avgflag='A', long_name='N flux required to support initial GPP', &
          ptr_patch=this%plant_ndemand_patch)
 
+    this%crop_seedn_to_froot_patch(begp:endp) = spval                              !(added by O.Dombrowski)
+    call hist_addfld1d (fname='CROP_SEEDN_TO_FROOT', units='gN/m^2/s', &
+         avgflag='A', long_name='crop seed source to fine root', &
+         ptr_patch=this%crop_seedn_to_froot_patch, default='inactive')
+
+    this%crop_seedn_to_deadstem_patch(begp:endp) = spval                           !(added by O.Dombrowski)
+    call hist_addfld1d (fname='CROP_SEEDN_TO_DEADSTEM', units='gN/m^2/s', &
+         avgflag='A', long_name='crop seed source to deadstem', &
+         ptr_patch=this%crop_seedn_to_deadstem_patch, default='inactive')
+
     this%avail_retransn_patch(begp:endp) = spval
     call hist_addfld1d (fname='AVAIL_RETRANSN', units='gN/m^2/s', &
          avgflag='A', long_name='N flux available from retranslocation pool', &
@@ -1364,7 +1383,17 @@ contains
             long_name='grain N shift storage to transfer', units='gN/m2/s', &
             interpinic_flag='interp', readvar=readvar, data=this%grainn_storage_to_xfer_patch)
     end if
+    if (use_crop) then
+       call restartvar(ncid=ncid, flag=flag, varname='prunen_to_litter', xtype=ncd_double,  &   !(added by O.Dombrowski)
+            dim1name='pft', &
+            long_name='pruning N to litterfall', units='gN/m2/s', &
+            interpinic_flag='interp', readvar=readvar, data=this%prunen_to_litter_patch)
 
+       call restartvar(ncid=ncid, flag=flag, varname='prunen_storage_to_litter', xtype=ncd_double,  &   !(added by O.Dombrowski)
+            dim1name='pft', &
+            long_name='pruning storage N to litterfall', units='gN/m2/s', &
+            interpinic_flag='interp', readvar=readvar, data=this%prunen_storage_to_litter_patch)
+    end if
     call restartvar(ncid=ncid, flag=flag, varname='plant_ndemand', xtype=ncd_double,  &
          dim1name='pft', &
          long_name='', units='', &
@@ -1644,6 +1673,8 @@ contains
        this%fire_nloss_patch(i)                          = value_patch
 
        this%crop_seedn_to_leaf_patch(i)                  = value_patch
+       this%crop_seedn_to_froot_patch(i)                 = value_patch
+       this%crop_seedn_to_deadstem_patch(i)              = value_patch
        this%grainn_to_cropprodn_patch(i)                 = value_patch
     end do
 
@@ -1661,6 +1692,8 @@ contains
           this%grainn_storage_to_xfer_patch(i)           = value_patch
           this%soyfixn_patch(i)                          = value_patch
           this%frootn_to_retransn_patch(i)               = value_patch
+          this%prunen_to_litter_patch(i)                 = value_patch
+          this%prunen_storage_to_litter_patch(i)         = value_patch
        end do
     end if
 
