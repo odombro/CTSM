@@ -35,9 +35,14 @@ module CNVegStateType
      real(r8) , pointer :: cumvd_patch                 (:)     ! patch cumulative vernalization d?ependence?
      real(r8) , pointer :: gddmaturity_patch           (:)     ! patch growing degree days (gdd) needed to harvest (ddays)
      real(r8) , pointer :: huileaf_patch               (:)     ! patch heat unit index needed from planting to leaf emergence
-     real(r8) , pointer :: huigrain_patch              (:)     ! patch heat unit index needed to reach vegetative maturity
+     real(r8) , pointer :: huigrain_patch              (:)     ! patch heat unit index needed to reach vegetative maturity/to start fruit fill for perennial crops
+     real(r8) , pointer :: huilfmat_patch              (:)     ! patch heat unit index needed to reach canopy maturity (added by O.Dombrowski)
+     real(r8) , pointer :: huiripe_patch               (:)     ! patch heat unit index needed to reach fruit cell expansion (ripening) (added by O.Dombrowski)
      real(r8) , pointer :: aleafi_patch                (:)     ! patch saved leaf allocation coefficient from phase 2
      real(r8) , pointer :: astemi_patch                (:)     ! patch saved stem allocation coefficient from phase 2
+     real(r8) , pointer :: arooti2_patch               (:)     ! patch saved root allocation coefficient from phase 2 (added by O.Dombrowski)
+     real(r8) , pointer :: arooti3_patch               (:)     ! patch saved root allocation coefficient from phase 3 (added by O.Dombrowski)
+     real(r8) , pointer :: aleafi3_patch               (:)     ! patch saved leaf allocation coefficient from phase 3 (added by O.Dombrowski)
      real(r8) , pointer :: aleaf_patch                 (:)     ! patch leaf allocation coefficient
      real(r8) , pointer :: astem_patch                 (:)     ! patch stem allocation coefficient
      real(r8) , pointer :: htmx_patch                  (:)     ! patch max hgt attained by a crop during yr (m)
@@ -81,6 +86,7 @@ module CNVegStateType
      real(r8), pointer :: onset_gdd_patch              (:)     ! patch onset growing degree days
      real(r8), pointer :: onset_swi_patch              (:)     ! patch onset soil water index
      real(r8), pointer :: offset_flag_patch            (:)     ! patch offset flag
+     real(r8), pointer :: offset2_flag_patch           (:)     ! patch orchard rotation flag (added by O.Dombrowski)
      real(r8), pointer :: offset_counter_patch         (:)     ! patch offset days counter
      real(r8), pointer :: offset_fdd_patch             (:)     ! patch offset freezing degree days counter
      real(r8), pointer :: offset_swi_patch             (:)     ! patch offset soil water index
@@ -90,6 +96,12 @@ module CNVegStateType
      real(r8), pointer :: bgtr_patch                   (:)     ! patch background transfer growth rate (1/s)
      real(r8), pointer :: c_allometry_patch            (:)     ! patch C allocation index (DIM)
      real(r8), pointer :: n_allometry_patch            (:)     ! patch N allocation index (DIM)
+     real(r8), pointer :: chill_day_patch              (:)     ! patch chill days requirements for fruit tree crops (added by O.Dombrowski)
+     real(r8), pointer :: anti_chill_day_patch         (:)     ! patch anti-chill days requirements for fruit tree crops (added by O.Dombrowski)
+     real(r8), pointer :: chill_flag_patch             (:)     ! patch chill requirements flag for fruit tree crops (added by O.Dombrowski)
+     real(r8), pointer :: harvest_flag_patch           (:)     ! patch harvest flag (added by O.Dombrowski)
+     real(r8), pointer :: prune_flag_patch             (:)     ! patch pruning flag (added by O.Dombrowski) 
+     real(r8), pointer :: storage_flag_patch           (:)     ! patch storage growth flag (added by O.Dombrowski)
 
      real(r8), pointer :: tempsum_potential_gpp_patch  (:)     ! patch temporary annual sum of potential GPP
      real(r8), pointer :: annsum_potential_gpp_patch   (:)     ! patch annual sum of potential GPP
@@ -197,7 +209,12 @@ contains
     allocate(this%gddmaturity_patch   (begp:endp))                   ; this%gddmaturity_patch   (:)   = spval
     allocate(this%huileaf_patch       (begp:endp))                   ; this%huileaf_patch       (:)   = nan
     allocate(this%huigrain_patch      (begp:endp))                   ; this%huigrain_patch      (:)   = 0.0_r8
+    allocate(this%huilfmat_patch      (begp:endp))                   ; this%huilfmat_patch      (:)   = 0.0_r8 
+    allocate(this%huiripe_patch       (begp:endp))                   ; this%huiripe_patch       (:)   = 0.0_r8 
     allocate(this%aleafi_patch        (begp:endp))                   ; this%aleafi_patch        (:)   = nan
+    allocate(this%arooti2_patch       (begp:endp))                   ; this%arooti2_patch       (:)   = nan 
+    allocate(this%arooti3_patch       (begp:endp))                   ; this%arooti3_patch       (:)   = nan 
+    allocate(this%aleafi3_patch       (begp:endp))                   ; this%aleafi3_patch       (:)   = nan 
     allocate(this%astemi_patch        (begp:endp))                   ; this%astemi_patch        (:)   = nan
     allocate(this%aleaf_patch         (begp:endp))                   ; this%aleaf_patch         (:)   = nan
     allocate(this%astem_patch         (begp:endp))                   ; this%astem_patch         (:)   = nan
@@ -241,6 +258,7 @@ contains
     allocate(this%onset_gdd_patch             (begp:endp)) ;    this%onset_gdd_patch             (:) = nan
     allocate(this%onset_swi_patch             (begp:endp)) ;    this%onset_swi_patch             (:) = nan
     allocate(this%offset_flag_patch           (begp:endp)) ;    this%offset_flag_patch           (:) = nan
+    allocate(this%offset2_flag_patch          (begp:endp)) ;    this%offset2_flag_patch          (:) = nan
     allocate(this%offset_counter_patch        (begp:endp)) ;    this%offset_counter_patch        (:) = nan
     allocate(this%offset_fdd_patch            (begp:endp)) ;    this%offset_fdd_patch            (:) = nan
     allocate(this%offset_swi_patch            (begp:endp)) ;    this%offset_swi_patch            (:) = nan
@@ -250,6 +268,12 @@ contains
     allocate(this%bgtr_patch                  (begp:endp)) ;    this%bgtr_patch                  (:) = nan
     allocate(this%c_allometry_patch           (begp:endp)) ;    this%c_allometry_patch           (:) = nan
     allocate(this%n_allometry_patch           (begp:endp)) ;    this%n_allometry_patch           (:) = nan
+    allocate(this%chill_day_patch             (begp:endp)) ;    this%chill_day_patch             (:) = nan 
+    allocate(this%anti_chill_day_patch        (begp:endp)) ;    this%anti_chill_day_patch        (:) = nan 
+    allocate(this%chill_flag_patch            (begp:endp)) ;    this%chill_flag_patch            (:) = nan   
+    allocate(this%harvest_flag_patch          (begp:endp)) ;    this%harvest_flag_patch          (:) = nan 
+    allocate(this%prune_flag_patch            (begp:endp)) ;    this%prune_flag_patch            (:) = nan 
+    allocate(this%storage_flag_patch          (begp:endp)) ;    this%storage_flag_patch          (:) = nan 
     allocate(this%tempsum_potential_gpp_patch (begp:endp)) ;    this%tempsum_potential_gpp_patch (:) = nan
     allocate(this%annsum_potential_gpp_patch  (begp:endp)) ;    this%annsum_potential_gpp_patch  (:) = nan
     allocate(this%tempmax_retransn_patch      (begp:endp)) ;    this%tempmax_retransn_patch      (:) = nan
@@ -387,6 +411,11 @@ contains
          avgflag='A', long_name='offset days counter', &
          ptr_patch=this%offset_counter_patch, default='inactive')
 
+    this%offset2_flag_patch(begp:endp) = spval
+    call hist_addfld1d (fname='OFFSET2_FLAG', units='none', &
+         avgflag='A', long_name='orchard rotation flag', &
+         ptr_patch=this%offset2_flag_patch, default='inactive')
+
     this%offset_fdd_patch(begp:endp) = spval
     call hist_addfld1d (fname='OFFSET_FDD', units='C degree-days', &
          avgflag='A', long_name='offset freezing degree days counter', &
@@ -421,6 +450,31 @@ contains
     call hist_addfld1d (fname='N_ALLOMETRY', units='none', &
          avgflag='A', long_name='N allocation index', &
          ptr_patch=this%n_allometry_patch, default='inactive')
+
+    this%chill_day_patch(begp:endp) = spval       
+    call hist_addfld1d (fname='CHILL_DAY', units='days', &
+         avgflag='A', long_name='Chill days needed for bud break of fruit tree crops', &
+         ptr_patch=this%chill_day_patch, default='inactive')
+
+    this%anti_chill_day_patch(begp:endp) = spval  
+    call hist_addfld1d (fname='ANTI_CHILL_DAY', units='days', &
+         avgflag='A', long_name='Anti-chill days needed for bud break of fruit tree crops', &
+         ptr_patch=this%anti_chill_day_patch, default='inactive')
+
+    this%chill_flag_patch(begp:endp) = spval     
+    call hist_addfld1d (fname='CHILL_FLAG', units='none', &
+         avgflag='A', long_name='Chill requirements flag for bud break of fruit tree crops', &
+         ptr_patch=this%chill_flag_patch, default='inactive')
+
+    this%harvest_flag_patch(begp:endp) = spval                          
+    call hist_addfld1d (fname='HARVEST_FLAG', units='none', &
+         avgflag='A', long_name='harvest flag (perennial crops)', &
+         ptr_patch=this%harvest_flag_patch, default='inactive')
+
+    this%storage_flag_patch(begp:endp) = spval                        
+    call hist_addfld1d (fname='STORAGE_FLAG', units='none', &
+         avgflag='A', long_name='storage growth flag (perennial crops)', &
+         ptr_patch=this%storage_flag_patch, default='inactive')
 
     this%tempsum_potential_gpp_patch(begp:endp) = spval
     call hist_addfld1d (fname='TEMPSUM_POTENTIAL_GPP', units='gC/m^2/yr', &
@@ -520,6 +574,7 @@ contains
           this%onset_gdd_patch(p)             = spval
           this%onset_swi_patch(p)             = spval
           this%offset_flag_patch(p)           = spval
+          this%offset2_flag_patch(p)          = spval
           this%offset_counter_patch(p)        = spval
           this%offset_fdd_patch(p)            = spval
           this%offset_swi_patch(p)            = spval
@@ -529,6 +584,12 @@ contains
           this%bgtr_patch(p)                  = spval
           this%c_allometry_patch(p)           = spval
           this%n_allometry_patch(p)           = spval
+          this%chill_day_patch(p)             = spval  
+          this%anti_chill_day_patch(p)        = spval  
+          this%chill_flag_patch(p)            = spval  
+          this%harvest_flag_patch(p)          = spval  
+          this%prune_flag_patch(p)            = spval  
+          this%storage_flag_patch(p)          = spval  
           this%tempsum_potential_gpp_patch(p) = spval
           this%annsum_potential_gpp_patch(p)  = spval
           this%tempmax_retransn_patch(p)      = spval
@@ -549,12 +610,19 @@ contains
           this%onset_gdd_patch(p)      = 0._r8
           this%onset_swi_patch(p)      = 0._r8
           this%offset_flag_patch(p)    = 0._r8
+          this%offset2_flag_patch(p)   = 0._r8
           this%offset_counter_patch(p) = 0._r8
           this%offset_fdd_patch(p)     = 0._r8
           this%offset_swi_patch(p)     = 0._r8
           this%lgsf_patch(p)           = 0._r8
           this%bglfr_patch(p)          = 0._r8
           this%bgtr_patch(p)           = 0._r8
+          this%chill_day_patch(p)      = 0._r8  
+          this%anti_chill_day_patch(p) = 0._r8  
+          this%chill_flag_patch(p)     = 0._r8  
+          this%harvest_flag_patch(p)   = 0._r8  
+          this%prune_flag_patch(p)     = 0._r8  
+          this%storage_flag_patch(p)   = 0._r8  
           this%annavg_t2m_patch(p)     = 280._r8
           this%tempavg_t2m_patch(p)    = 0._r8
           this%grain_flag_patch(p)     = 0._r8
@@ -658,6 +726,11 @@ contains
          dim1name='pft', &
          long_name='offset flag', units='unitless' , &
          interpinic_flag='interp', readvar=readvar, data=this%offset_flag_patch)
+
+    call restartvar(ncid=ncid, flag=flag, varname='offset2_flag', xtype=ncd_double,  &
+         dim1name='pft', &
+         long_name='orchard rotation flag', units='unitless' , &
+         interpinic_flag='interp', readvar=readvar, data=this%offset2_flag_patch)
 
     call restartvar(ncid=ncid, flag=flag, varname='offset_counter', xtype=ncd_double,  &
          dim1name='pft', &
@@ -796,6 +869,18 @@ contains
             dim1name='pft', long_name='Saved stem allocation coefficient from phase 2', units='', &
             interpinic_flag='interp', readvar=readvar, data=this%astemi_patch)
 
+       call restartvar(ncid=ncid, flag=flag,  varname='arooti2', xtype=ncd_double,  &
+            dim1name='pft', long_name='Saved root allocation coefficient from phase 2', units='', &
+            interpinic_flag='interp', readvar=readvar, data=this%arooti2_patch)
+
+       call restartvar(ncid=ncid, flag=flag,  varname='arooti3', xtype=ncd_double,  &
+            dim1name='pft', long_name='Saved root allocation coefficient from phase 3', units='', &
+            interpinic_flag='interp', readvar=readvar, data=this%arooti3_patch)
+
+       call restartvar(ncid=ncid, flag=flag,  varname='aleafi3', xtype=ncd_double,  &
+            dim1name='pft', long_name='Saved leaf allocation coefficient from phase 3', units='', &
+            interpinic_flag='interp', readvar=readvar, data=this%aleafi3_patch)
+
        call restartvar(ncid=ncid, flag=flag,  varname='hdidx', xtype=ncd_double,  &
             dim1name='pft', long_name='cold hardening index', units='', &
             interpinic_flag='interp', readvar=readvar, data=this%hdidx_patch)
@@ -816,9 +901,42 @@ contains
             dim1name='pft', long_name='heat unit index needed to reach vegetative maturity', units='', &
             interpinic_flag='interp', readvar=readvar, data=this%huigrain_patch)
 
+       call restartvar(ncid=ncid, flag=flag,  varname='huilfmat', xtype=ncd_double,  &
+            dim1name='pft', long_name='heat unit index needed to reach canopy maturity', units='', &
+            interpinic_flag='interp', readvar=readvar, data=this%huilfmat_patch)
+
+       call restartvar(ncid=ncid, flag=flag,  varname='huiripe', xtype=ncd_double,  &
+            dim1name='pft', long_name='heat unit index needed to reach fruit cell expansion', units='', &
+            interpinic_flag='interp', readvar=readvar, data=this%huiripe_patch)
+
        call restartvar(ncid=ncid, flag=flag, varname='grain_flag', xtype=ncd_double,  &
             dim1name='pft', long_name='', units='', &
             interpinic_flag='interp', readvar=readvar, data=this%grain_flag_patch)
+
+       call restartvar(ncid=ncid, flag=flag, varname='chill_day', xtype=ncd_double,  &   
+            dim1name='pft', long_name='', units='days', &
+            interpinic_flag='interp', readvar=readvar, data=this%chill_day_patch)
+
+       call restartvar(ncid=ncid, flag=flag, varname='anti_chill_day', xtype=ncd_double,  &   
+            dim1name='pft', long_name='', units='days', &
+            interpinic_flag='interp', readvar=readvar, data=this%anti_chill_day_patch)
+
+       call restartvar(ncid=ncid, flag=flag, varname='chill_flag', xtype=ncd_double,  &   
+            dim1name='pft', long_name='', units='', &
+            interpinic_flag='interp', readvar=readvar, data=this%chill_flag_patch)
+
+       call restartvar(ncid=ncid, flag=flag, varname='harvest_flag', xtype=ncd_double,  &   
+            dim1name='pft', long_name='harvest flag (perennial crops)', units='unitless', &
+            interpinic_flag='interp', readvar=readvar, data=this%harvest_flag_patch)
+
+       call restartvar(ncid=ncid, flag=flag, varname='prune_flag', xtype=ncd_double,  &   
+            dim1name='pft', long_name='pruning flag for perenneial crops', units='unitless', &
+            interpinic_flag='interp', readvar=readvar, data=this%prune_flag_patch)
+
+       call restartvar(ncid=ncid, flag=flag, varname='storage_flag', xtype=ncd_double,  &   
+            dim1name='pft', long_name='storage growth flag for perenneial crops', units='unitless', &
+            interpinic_flag='interp', readvar=readvar, data=this%storage_flag_patch)
+
     end if
     if ( flag == 'read' .and. num_reseed_patch > 0 )then
        if ( masterproc ) write(iulog, *) 'Reseed dead plants for CNVegState'
@@ -834,6 +952,7 @@ contains
           this%onset_gdd_patch(p)      = 0._r8
           this%onset_swi_patch(p)      = 0._r8
           this%offset_flag_patch(p)    = 0._r8
+          this%offset2_flag_patch(p)   = 0._r8
           this%offset_counter_patch(p) = 0._r8
           this%offset_fdd_patch(p)     = 0._r8
           this%offset_swi_patch(p)     = 0._r8
@@ -843,6 +962,12 @@ contains
           this%annavg_t2m_patch(p)     = 280._r8
           this%tempavg_t2m_patch(p)    = 0._r8
           this%grain_flag_patch(p)     = 0._r8
+          this%harvest_flag_patch(p)   = 0._r8 
+          this%prune_flag_patch(p)     = 0._r8 
+          this%storage_flag_patch(p)   = 0._r8 
+          this%chill_day_patch(p)      = 0._r8 
+          this%anti_chill_day_patch(p) = 0._r8 
+          this%chill_flag_patch(p)     = 0._r8
 
           this%c_allometry_patch(p)           = 0._r8
           this%n_allometry_patch(p)           = 0._r8
