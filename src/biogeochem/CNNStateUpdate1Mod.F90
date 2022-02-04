@@ -113,6 +113,8 @@ contains
          ivt                   => patch%itype                                    , & ! Input:  [integer  (:)     ]  patch vegetation type                                
 
          woody                 => pftcon%woody                                 , & ! Input:  binary flag for woody lifeform (1=woody, 0=not woody)
+         perennial             => pftcon%perennial                             , & ! Input:  binary flag for perennial crop types (1=perennial, 0= not perennial)
+         mulch_pruning         => pftcon%mulch_pruning                         , & ! Input:  binary flag for exporting of mulching of pruning material (1=mulching, 0=exporting)
 
          nf_veg                => cnveg_nitrogenflux_inst                      , & ! Input:
          ns_veg                => cnveg_nitrogenstate_inst                     , & ! Output:
@@ -162,11 +164,17 @@ contains
          end if
 
          if (ivt(p) >= npcropmin) then ! skip 2 generic crops
-            ! lines here for consistency; the transfer terms are zero
-            ns_veg%livestemn_patch(p)       = ns_veg%livestemn_patch(p)      + nf_veg%livestemn_xfer_to_livestemn_patch(p)*dt
-            ns_veg%livestemn_xfer_patch(p)  = ns_veg%livestemn_xfer_patch(p) - nf_veg%livestemn_xfer_to_livestemn_patch(p)*dt
-            ns_veg%grainn_patch(p)          = ns_veg%grainn_patch(p)         + nf_veg%grainn_xfer_to_grainn_patch(p)*dt
-            ns_veg%grainn_xfer_patch(p)     = ns_veg%grainn_xfer_patch(p)    - nf_veg%grainn_xfer_to_grainn_patch(p)*dt
+            if (perennial(ivt(p)) == 1._r8 .and. woody(ivt(p)) == 1.0_r8) then ! (added by O.Dombrowski)
+               ns_veg%grainn_patch(p)       = ns_veg%grainn_patch(p)         + nf_veg%grainn_xfer_to_grainn_patch(p)*dt
+               ns_veg%grainn_xfer_patch(p)  = ns_veg%grainn_xfer_patch(p)    - nf_veg%grainn_xfer_to_grainn_patch(p)*dt
+               
+            else
+               ! lines here for consistency; the transfer terms are zero
+               ns_veg%livestemn_patch(p)       = ns_veg%livestemn_patch(p)      + nf_veg%livestemn_xfer_to_livestemn_patch(p)*dt
+               ns_veg%livestemn_xfer_patch(p)  = ns_veg%livestemn_xfer_patch(p) - nf_veg%livestemn_xfer_to_livestemn_patch(p)*dt
+               ns_veg%grainn_patch(p)          = ns_veg%grainn_patch(p)         + nf_veg%grainn_xfer_to_grainn_patch(p)*dt
+               ns_veg%grainn_xfer_patch(p)     = ns_veg%grainn_xfer_patch(p)    - nf_veg%grainn_xfer_to_grainn_patch(p)*dt
+            end if
          end if
 
          ! phenology: litterfall and retranslocation fluxes
@@ -194,18 +202,35 @@ contains
             end if
          end if
          if (ivt(p) >= npcropmin) then ! Beth adds retrans from froot
-            ns_veg%frootn_patch(p)       = ns_veg%frootn_patch(p)     - nf_veg%frootn_to_retransn_patch(p)*dt
-            ns_veg%retransn_patch(p)     = ns_veg%retransn_patch(p)   + nf_veg%frootn_to_retransn_patch(p)*dt
-            ns_veg%livestemn_patch(p)    = ns_veg%livestemn_patch(p)  - nf_veg%livestemn_to_litter_patch(p)*dt
-            ns_veg%livestemn_patch(p)    = ns_veg%livestemn_patch(p)  - nf_veg%livestemn_to_biofueln_patch(p)*dt
-            ns_veg%leafn_patch(p)        = ns_veg%leafn_patch(p)      - nf_veg%leafn_to_biofueln_patch(p)*dt
-            ns_veg%livestemn_patch(p)    = ns_veg%livestemn_patch(p)  - nf_veg%livestemn_to_retransn_patch(p)*dt
-            ns_veg%retransn_patch(p)     = ns_veg%retransn_patch(p)   + nf_veg%livestemn_to_retransn_patch(p)*dt
-            ns_veg%grainn_patch(p)       = ns_veg%grainn_patch(p) &
-                 - (nf_veg%grainn_to_food_patch(p) + nf_veg%grainn_to_seed_patch(p))*dt
-            ns_veg%cropseedn_deficit_patch(p) = ns_veg%cropseedn_deficit_patch(p) &
-                 - nf_veg%crop_seedn_to_leaf_patch(p) * dt &
-                 + nf_veg%grainn_to_seed_patch(p) * dt
+            if (perennial(ivt(p)) == 1._r8 .and. woody(ivt(p)) == 1.0_r8) then ! (added by O.Dombrowski)
+                ns_veg%frootn_patch(p)       = ns_veg%frootn_patch(p)     - nf_veg%frootn_to_retransn_patch(p)*dt
+                ns_veg%retransn_patch(p)     = ns_veg%retransn_patch(p)   + nf_veg%frootn_to_retransn_patch(p)*dt
+                ns_veg%grainn_patch(p)   = ns_veg%grainn_patch(p) &
+                                         - (nf_veg%grainn_to_food_patch(p) + nf_veg%grainn_to_seed_patch(p))*dt
+                ns_veg%cropseedn_deficit_patch(p) = ns_veg%cropseedn_deficit_patch(p) &
+                                                  - nf_veg%crop_seedn_to_leaf_patch(p) * dt &
+                                                  - nf_veg%crop_seedn_to_froot_patch(p) * dt & ! added by (O.Dombrowski)
+                                                  - nf_veg%crop_seedn_to_deadstem_patch(p) * dt & ! added by (O.Dombrowski)
+                                                  + nf_veg%grainn_to_seed_patch(p) * dt
+                if (mulch_pruning(ivt(p)) == 1._r8) then
+                   ! update stem N after pruning
+                   ns_veg%deadstemn_patch(p)    = ns_veg%deadstemn_patch(p)  - nf_veg%prunen_to_litter_patch(p)*dt 
+                   ns_veg%deadstemn_storage_patch(p)    = ns_veg%deadstemn_storage_patch(p)  - nf_veg%prunen_storage_to_litter_patch(p)*dt
+                end if
+            else
+               ns_veg%frootn_patch(p)       = ns_veg%frootn_patch(p)     - nf_veg%frootn_to_retransn_patch(p)*dt
+               ns_veg%retransn_patch(p)     = ns_veg%retransn_patch(p)   + nf_veg%frootn_to_retransn_patch(p)*dt
+               ns_veg%livestemn_patch(p)    = ns_veg%livestemn_patch(p)  - nf_veg%livestemn_to_litter_patch(p)*dt
+               ns_veg%livestemn_patch(p)    = ns_veg%livestemn_patch(p)  - nf_veg%livestemn_to_biofueln_patch(p)*dt
+               ns_veg%leafn_patch(p)        = ns_veg%leafn_patch(p)      - nf_veg%leafn_to_biofueln_patch(p)*dt
+               ns_veg%livestemn_patch(p)    = ns_veg%livestemn_patch(p)  - nf_veg%livestemn_to_retransn_patch(p)*dt
+               ns_veg%retransn_patch(p)     = ns_veg%retransn_patch(p)   + nf_veg%livestemn_to_retransn_patch(p)*dt
+               ns_veg%grainn_patch(p)       = ns_veg%grainn_patch(p) &
+                    - (nf_veg%grainn_to_food_patch(p) + nf_veg%grainn_to_seed_patch(p))*dt
+               ns_veg%cropseedn_deficit_patch(p) = ns_veg%cropseedn_deficit_patch(p) &
+                    - nf_veg%crop_seedn_to_leaf_patch(p) * dt &
+                    + nf_veg%grainn_to_seed_patch(p) * dt
+            end if
          end if
 
          ! uptake from soil mineral N pool
@@ -248,14 +273,22 @@ contains
          end if
 
          if (ivt(p) >= npcropmin) then ! skip 2 generic crops
-            ns_veg%npool_patch(p)              = ns_veg%npool_patch(p)              - nf_veg%npool_to_livestemn_patch(p)*dt
-            ns_veg%livestemn_patch(p)          = ns_veg%livestemn_patch(p)          + nf_veg%npool_to_livestemn_patch(p)*dt
-            ns_veg%npool_patch(p)              = ns_veg%npool_patch(p)              - nf_veg%npool_to_livestemn_storage_patch(p)*dt
-            ns_veg%livestemn_storage_patch(p)  = ns_veg%livestemn_storage_patch(p)  + nf_veg%npool_to_livestemn_storage_patch(p)*dt
-            ns_veg%npool_patch(p)              = ns_veg%npool_patch(p)              - nf_veg%npool_to_grainn_patch(p)*dt
-            ns_veg%grainn_patch(p)             = ns_veg%grainn_patch(p)             + nf_veg%npool_to_grainn_patch(p)*dt
-            ns_veg%npool_patch(p)              = ns_veg%npool_patch(p)              - nf_veg%npool_to_grainn_storage_patch(p)*dt
-            ns_veg%grainn_storage_patch(p)     = ns_veg%grainn_storage_patch(p)     + nf_veg%npool_to_grainn_storage_patch(p)*dt
+            if (perennial(ivt(p)) == 1._r8 .and. woody(ivt(p)) == 1.0_r8) then ! (added by O.Dombrowski)
+               ns_veg%npool_patch(p)           = ns_veg%npool_patch(p)              - nf_veg%npool_to_grainn_patch(p)*dt
+               ns_veg%grainn_patch(p)             = ns_veg%grainn_patch(p)          + nf_veg%npool_to_grainn_patch(p)*dt
+               ns_veg%npool_patch(p)              = ns_veg%npool_patch(p)           - nf_veg%npool_to_grainn_storage_patch(p)*dt
+               ns_veg%grainn_storage_patch(p)     = ns_veg%grainn_storage_patch(p)  + nf_veg%npool_to_grainn_storage_patch(p)*dt
+               
+            else
+               ns_veg%npool_patch(p)              = ns_veg%npool_patch(p)              - nf_veg%npool_to_livestemn_patch(p)*dt
+               ns_veg%livestemn_patch(p)          = ns_veg%livestemn_patch(p)          + nf_veg%npool_to_livestemn_patch(p)*dt
+               ns_veg%npool_patch(p)              = ns_veg%npool_patch(p)              - nf_veg%npool_to_livestemn_storage_patch(p)*dt
+               ns_veg%livestemn_storage_patch(p)  = ns_veg%livestemn_storage_patch(p)  + nf_veg%npool_to_livestemn_storage_patch(p)*dt
+               ns_veg%npool_patch(p)              = ns_veg%npool_patch(p)              - nf_veg%npool_to_grainn_patch(p)*dt
+               ns_veg%grainn_patch(p)             = ns_veg%grainn_patch(p)             + nf_veg%npool_to_grainn_patch(p)*dt
+               ns_veg%npool_patch(p)              = ns_veg%npool_patch(p)              - nf_veg%npool_to_grainn_storage_patch(p)*dt
+               ns_veg%grainn_storage_patch(p)     = ns_veg%grainn_storage_patch(p)     + nf_veg%npool_to_grainn_storage_patch(p)*dt
+            end if
          end if
 
          ! move storage pools into transfer pools
@@ -276,11 +309,16 @@ contains
          end if
 
          if (ivt(p) >= npcropmin) then ! skip 2 generic crops
-            ! lines here for consistency; the transfer terms are zero
-            ns_veg%livestemn_storage_patch(p)  = ns_veg%livestemn_storage_patch(p) - nf_veg%livestemn_storage_to_xfer_patch(p)*dt
-            ns_veg%livestemn_xfer_patch(p)     = ns_veg%livestemn_xfer_patch(p)    + nf_veg%livestemn_storage_to_xfer_patch(p)*dt
-            ns_veg%grainn_storage_patch(p)     = ns_veg%grainn_storage_patch(p)    - nf_veg%grainn_storage_to_xfer_patch(p)*dt
-            ns_veg%grainn_xfer_patch(p)        = ns_veg%grainn_xfer_patch(p)       + nf_veg%grainn_storage_to_xfer_patch(p)*dt
+            if (perennial(ivt(p)) == 1._r8 .and. woody(ivt(p)) == 1.0_r8) then ! (added by O.Dombrowski)
+               ns_veg%grainn_storage_patch(p) = ns_veg%grainn_storage_patch(p)    - nf_veg%grainn_storage_to_xfer_patch(p)*dt
+               ns_veg%grainn_xfer_patch(p)    = ns_veg%grainn_xfer_patch(p)       + nf_veg%grainn_storage_to_xfer_patch(p)*dt
+            else
+               ! lines here for consistency; the transfer terms are zero
+               ns_veg%livestemn_storage_patch(p)  = ns_veg%livestemn_storage_patch(p) - nf_veg%livestemn_storage_to_xfer_patch(p)*dt
+               ns_veg%livestemn_xfer_patch(p)     = ns_veg%livestemn_xfer_patch(p)    + nf_veg%livestemn_storage_to_xfer_patch(p)*dt
+               ns_veg%grainn_storage_patch(p)     = ns_veg%grainn_storage_patch(p)    - nf_veg%grainn_storage_to_xfer_patch(p)*dt
+               ns_veg%grainn_xfer_patch(p)        = ns_veg%grainn_xfer_patch(p)       + nf_veg%grainn_storage_to_xfer_patch(p)*dt
+            end if
          end if
 
       end do
