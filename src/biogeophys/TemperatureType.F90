@@ -55,6 +55,7 @@ module TemperatureType
      real(r8), pointer :: dt_grnd_col              (:)   ! col change in t_grnd, last iteration (Kelvin)
      real(r8), pointer :: thv_col                  (:)   ! col virtual potential temperature (kelvin)
      real(r8), pointer :: thm_patch                (:)   ! patch intermediate variable (forc_t+0.0098*forc_hgt_t_patch)
+     real(r8), pointer :: t_a24_patch              (:)   ! patch 24-hour running mean of the 2 m temperature (K)
      real(r8), pointer :: t_a10_patch              (:)   ! patch 10-day running mean of the 2 m temperature (K)
      real(r8), pointer :: soila10_col              (:)   ! col 10-day running mean of the 12cm soil layer temperature (K)
      real(r8), pointer :: t_a10min_patch           (:)   ! patch 10-day running mean of min 2-m temperature
@@ -86,6 +87,7 @@ module TemperatureType
      ! being: that way one parameterization is free to change the exact meaning of its
      ! accumulator without affecting the other).
      !
+     real(r8), pointer :: t_ref24_patch           (:)   ! patch 24hr average 2 m air temperature (K)
      real(r8), pointer :: t_veg24_patch           (:)   ! patch 24hr average vegetation temperature (K)
      real(r8), pointer :: t_veg240_patch          (:)   ! patch 240hr average vegetation temperature (Kelvin)
      real(r8), pointer :: gdd0_patch              (:)   ! patch growing degree-days base  0C from planting  (ddays)
@@ -254,6 +256,7 @@ contains
     allocate(this%t_ref2m_min_inst_u_patch (begp:endp))                      ; this%t_ref2m_min_inst_u_patch (:)   = nan
 
     ! Accumulated fields
+    allocate(this%t_ref24_patch            (begp:endp))                      ; this%t_ref24_patch            (:)   = nan
     allocate(this%t_veg24_patch            (begp:endp))                      ; this%t_veg24_patch            (:)   = nan
     allocate(this%t_veg240_patch           (begp:endp))                      ; this%t_veg240_patch           (:)   = nan
     allocate(this%gdd0_patch               (begp:endp))                      ; this%gdd0_patch               (:)   = spval
@@ -580,6 +583,11 @@ contains
     end if
 
     ! Accumulated quantities
+
+    this%t_ref24_patch(begp:endp) = spval
+    call hist_addfld1d (fname='TREF24', units='K',  &
+         avgflag='A', long_name='2 m air temperature (last 24hrs)', &
+         ptr_patch=this%t_ref24_patch, default='inactive')
 
     this%t_veg24_patch(begp:endp) = spval
     call hist_addfld1d (fname='TV24', units='K',  &
@@ -955,6 +963,10 @@ contains
          long_name='Urban 2m height surface air temperature', units='K',                                              &
          interpinic_flag='interp', readvar=readvar, data=this%t_ref2m_u_patch)
 
+    call restartvar(ncid=ncid, flag=flag, varname='T_REF24', xtype=ncd_double,  &
+         dim1name='pft', &
+         long_name='daily average 2 m height surface air temperature (K)', units='K', &
+         interpinic_flag='interp', readvar=readvar, data=this%t_ref24_patch)
 
     call restartvar(ncid=ncid, flag=flag, varname='T_REF2M_MIN', xtype=ncd_double,  &
          dim1name='pft', &
@@ -1159,6 +1171,10 @@ contains
 
     dtime = get_step_size_real()
 
+    call init_accum_field (name='T_REF24', units='K', &
+         desc='24hr average of 2 m air temperature',  accum_type='timeavg', accum_period=-1,    &
+         subgrid_type='pft', numlev=1, init_value=0._r8)
+
     this%t_veg24_patch(bounds%begp:bounds%endp) = spval
     call init_accum_field (name='T_VEG24', units='K',                                              &
          desc='24hr average of vegetation temperature',  accum_type='runmean', accum_period=-1,    &
@@ -1274,6 +1290,9 @@ contains
 
     ! Determine time step
     nstep = get_nstep()
+
+    call extract_accum_field ('T_REF24', rbufslp, nstep)
+    this%t_ref24_patch(begp:endp) = rbufslp(begp:endp)
 
     call extract_accum_field ('T_VEG24', rbufslp, nstep)
     this%t_veg24_patch(begp:endp) = rbufslp(begp:endp)
@@ -1484,6 +1503,12 @@ contains
 
     call update_accum_field  ('T10', this%t_ref2m_patch, nstep)
     call extract_accum_field ('T10', this%t_a10_patch, nstep)
+
+    if ( use_crop )then
+       ! Accumulate and extract T_REF24
+
+       call update_accum_field  ('T_REF24' ,  this%t_ref2m_patch, nstep)
+       call extract_accum_field ('T_REF24' , this%t_ref24_patch  , nstep)
     
     ! Accumulate and extract SOIL10, for a sepcific soil layer
     !(acumulates SOIL10 as 10-day running mean)
