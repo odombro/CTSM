@@ -1649,6 +1649,7 @@ contains
     ! !DESCRIPTION:
     ! Code from AgroIBIS adapted for deciduous fruit trees by O. Dombrowski (2022) to determine crop phenology and code from CN to
     ! handle CN fluxes during the phenological onset & offset periods.
+    ! New phenological stages and triggers, as well as management practices typical for fruit orchards are described
     
     ! !USES:
     use shr_const_mod    , only : SHR_CONST_TKFRZ
@@ -1746,7 +1747,7 @@ contains
          croplive          =>    crop_inst%croplive_patch                      , & ! Output: [logical  (:) ]  Flag, true if planted, not harvested               
          cropplant         =>    crop_inst%cropplant_patch                     , & ! Output: [logical  (:) ]  Flag, true if crop may be planted                  
          vf                =>    crop_inst%vf_patch                            , & ! Output: [real(r8) (:) ]  vernalization factor                              
-         yrop              =>    crop_inst%yrop_patch                          , & ! Output: [integer  (:) ]  year of planting (Y.Fan)
+         yrop              =>    crop_inst%yrop_patch                          , & ! Output: [integer  (:) ]  year of planting (added by O.Dombrowski)
          peaklai           =>    cnveg_state_inst%peaklai_patch                  , & ! Output: [integer  (:) ] 1: max allowed lai; 0: not at max                  
          tlai              =>    canopystate_inst%tlai_patch                   , & ! Input:  [real(r8) (:) ]  one-sided leaf area index, no burying by snow     
          
@@ -1767,11 +1768,9 @@ contains
          offset2_flag      =>    cnveg_state_inst%offset2_flag_patch           , & ! Output: [real(r8) (:) ]  orchard rotation flag
          onset_counter     =>    cnveg_state_inst%onset_counter_patch          , & ! Output: [real(r8) (:) ]  onset counter                                     
          offset_counter    =>    cnveg_state_inst%offset_counter_patch         , & ! Output: [real(r8) (:) ]  offset counter                                    
-         perennial         =>    pftcon%perennial                              , & ! Input:  binary flag for perennial crop phenology (1=perennial, 0=not perennial) (added by Y.Fan)
-         gddmaturity2      =>    cnveg_state_inst%gddmaturity2_patch           , & ! Input:  [real(r8) (:)   ]  gdd needed to harvest since previous harvest (Y.Fan)
-         huigrain2         =>    cnveg_state_inst%huigrain2_patch              , & ! Input:  [real(r8) (:)   ]  gdd needed from last harvest to start of next grainfill (Y.Fan)
-         harvest_flag      =>    cnveg_state_inst%harvest_flag_patch           , & ! Output: [real(r8) (:)    ]  harvest flag (added by Y.Fan)       
-         prune_flag        =>    cnveg_state_inst%prune_flag_patch             , & ! Output: [real(r8) (:)    ]  pruning flag for perennials (added by Y.Fan)
+         perennial         =>    pftcon%perennial                              , & ! Input:  binary flag for perennial crop phenology (1=perennial, 0=not perennial) (added by O.Dombrowski)
+         harvest_flag      =>    cnveg_state_inst%harvest_flag_patch           , & ! Output: [real(r8) (:)    ]  harvest flag (added by O.Dombrowski)       
+         prune_flag        =>    cnveg_state_inst%prune_flag_patch             , & ! Output: [real(r8) (:)    ]  pruning flag for perennials (added by O.Dombrowski)
          storage_flag      =>    cnveg_state_inst%storage_flag_patch           , & ! Output: [real(r8) (:)    ]  flag to switch to storage growth for perennials
          onset_gddflag     =>    cnveg_state_inst%onset_gddflag_patch          , & ! Output: [real(r8)  (:)   ]  onset freeze flag                                 
          onset_gdd         =>    cnveg_state_inst%onset_gdd_patch              , & ! Output: [real(r8)  (:)   ]  onset growing degree days 
@@ -1875,7 +1874,7 @@ contains
          g = patch%gridcell(p)
          h = inhemi(p)
          
-         if (perennial(ivt(p)) == 1._r8) then ! flags for perennial crop phenology (O.Dombrowski)
+         if (perennial(ivt(p)) == 1._r8) then ! flag for perennial crop phenology
                  ! background litterfall and transfer rates; long growing season factor
                  bglfr(p) = 0._r8 
                  bgtr(p)  = 0._r8
@@ -1891,9 +1890,7 @@ contains
                  end if
 
                  if (season_decid(ivt(p)) == 1._r8) then
-                    ! onset gdd adapted by O.Dombrowski
-                    crit_onset_gdd = exp(2.5_r8 + 0.1_r8*(annavg_t2m(p) - SHR_CONST_TKFRZ))
-                    
+                                        
                     ! set flag for solstice period (winter->summer = 1, summer->winter =0)
                     if (dayl(g) >= prev_dayl(g)) then
                        ws_flag = 1._r8
@@ -1901,11 +1898,12 @@ contains
                        ws_flag = 0._r8
                     end if
 
-                    ! base temperature, or critical temperature for chill accumulation
-                    tbase = 4._r8 !baset(ivt(p))
+                    ! base temperature and critical temperature for chill accumulation
+                    tbase = baset(ivt(p))
 
                     ! set flag for start/end of chill period (chill_flag=1),
                     ! no chill period (chill_flag=0)
+                    ! only valid for NH at the moment!
                     if (kmo == 11 .and. kda == 1) then
                        chill_flag(p) = 1._r8
                     end if
@@ -1936,7 +1934,7 @@ contains
                           croplive(p)  = .true.
                           cropplant(p) = .true.
                           idop(p)      = jday
-                          yrop(p)      = kyr !(Y.Fan)
+                          yrop(p)      = kyr 
                           harvdate(p)  = NOT_Harvested
                           
                           ! Fruit trees are usually transplanted from nursery
@@ -1982,7 +1980,7 @@ contains
                        chill_flag(p) = 1._r8
                        onset_gddflag(p) = 1._r8
                        
-                       harvest_flag(p) = 0._r8 ! annual harvest flag for perennial crops (Y.Fan)           
+                       harvest_flag(p) = 0._r8 ! annual harvest flag for perennial crops            
                  end if ! crop not live nor planted
 
                  ! ----------------------------------
@@ -2155,7 +2153,7 @@ contains
                              huilfmat(p) = huileaf(p) + lfmat(ivt(p))
                              gddmaturity(p)= huileaf(p) + hybgdd(ivt(p))
                             
-                             ! set parameters for bud burst calculation
+                             ! reset parameters for bud burst calculation
                              chill_day(p) = 0._r8
                              anti_chill_day(p) = 0._r8
                              chill_flag(p) = 0._r8
@@ -2270,7 +2268,7 @@ contains
                             fert_counter(p) = fert_counter(p) - dtrad
                          end if
 
-                         ! only begin to test for offset daylength once past the summer sol
+                         ! only begin to test for offset critical temperature once past the summer sol
                          if (ws_flag == 0._r8 .and. t_ref24(p) < crit_temp(ivt(p))) then
                              offset_flag(p) = 1._r8
                              !storage_flag(p) = 0._r8
@@ -3453,8 +3451,7 @@ contains
 
          ! determine days past planting for pruning management
          idpp = int(dayspyr)*(kyr-yrop(p)) + jday - idop(p)
-         !incorporate a one-time harvest: annually for perennial crops (Y.Fan)
-         !leaf flux is treated according to leaf property (evergreen or deciduous) and management (prune or not)
+         !incorporate a one-time harvest: annually for perennial crops
          !grain flux goes to food
          if (harvest_flag(p) == 1._r8)then
            if (perennial(ivt(p)) == 1._r8) then
